@@ -1,0 +1,1391 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>快速笔记 | Quick Notes</title>
+    <!-- Tailwind CSS v3 -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Font Awesome -->
+    <link href="https://cdn.jsdelivr.net/npm/font-awesome@4.7.0/css/font-awesome.min.css" rel="stylesheet">
+    <!-- 统一的 Tailwind 配置 -->
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        primary: '#3b82f6',
+                        danger: '#ef4444',
+                        success: '#10b981',
+                        ai: '#8b5cf6',
+                        month: [
+                            '#3b82f6', '#10b981', '#f59e0b', '#ef4444', 
+                            '#8b5cf6', '#ec4899', '#6366f1', '#14b8a6',
+                            '#f97316', '#84cc16', '#6b7280', '#0ea5e9'
+                        ]
+                    },
+                    fontFamily: {
+                        sans: ['Inter', 'system-ui', 'sans-serif'],
+                    },
+                    animation: {
+                        'fade-in': 'fadeIn 0.3s ease-in-out',
+                        'pulse': 'pulse 1.5s ease-in-out infinite',
+                    },
+                    keyframes: {
+                        fadeIn: {
+                            '0%': { opacity: '0' },
+                            '100%': { opacity: '1' },
+                        }
+                    }
+                }
+            }
+        }
+    </script>
+    <style type="text/tailwindcss">
+        @layer utilities {
+            .note-card {
+                @apply relative p-4 rounded-lg shadow-md transition-all duration-300 hover:shadow-lg border-l-4 cursor-pointer;
+            }
+            .note-card.selected {
+                @apply ring-2 ring-ai ring-opacity-50 bg-ai/5;
+            }
+            .note-card.dragging {
+                @apply opacity-50 scale-105;
+            }
+            .btn {
+                @apply px-4 py-2 rounded-md font-medium transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-white;
+            }
+            .btn-primary {
+                @apply bg-primary text-white hover:bg-primary/90 focus:ring-primary/50;
+            }
+            .btn-secondary {
+                @apply bg-gray-200 text-gray-800 hover:bg-gray-300 focus:ring-gray-400;
+            }
+            .btn-ai {
+                @apply bg-ai text-white hover:bg-ai/90 focus:ring-ai/50;
+            }
+            .input-field {
+                @apply w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-primary focus:border-primary;
+            }
+            .textarea-field {
+                @apply w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-primary focus:border-primary resize-none;
+            }
+            .quick-input-row {
+                @apply grid grid-cols-12 gap-2 items-center w-full;
+            }
+            .note-row-layout {
+                @apply grid grid-cols-12 gap-2 items-center w-full;
+            }
+            .expand-btn {
+                @apply text-gray-600 hover:text-primary transition-colors;
+            }
+            .tag {
+                @apply inline-block px-2 py-1 text-xs font-medium rounded-full bg-gray-100 text-gray-800;
+            }
+            .ai-tag {
+                @apply inline-block px-2 py-1 text-xs font-medium rounded-full bg-ai/10 text-ai border border-ai/20;
+            }
+            .selected-count-badge {
+                @apply fixed top-20 right-4 bg-ai text-white px-3 py-1 rounded-full text-sm font-medium shadow-lg z-40;
+            }
+            .week-line-container {
+                @apply relative pl-4 md:pl-6 ml-2 md:ml-4;
+            }
+            .week-line {
+                @apply absolute left-0 top-0 bottom-0 w-0.5;
+            }
+        }
+    </style>
+</head>
+<body class="bg-gray-50 text-gray-900 min-h-screen">
+    <!-- 顶部导航栏 -->
+    <header class="sticky top-0 z-50 bg-white/70 backdrop-blur-md border-b border-gray-200 shadow-sm">
+        <div class="container mx-auto px-4 py-3 flex items-center justify-between">
+            <div class="flex items-center space-x-2">
+                <i class="fa fa-sticky-note text-primary text-2xl"></i>
+                <h1 class="text-xl font-bold">快速笔记</h1>
+            </div>
+            <div id="selection-info" class="hidden items-center space-x-4">
+                <span id="selected-count" class="text-sm font-medium text-ai"></span>
+                <button id="clear-selection-btn" class="text-sm text-gray-500 hover:text-gray-700">
+                    <i class="fa fa-times mr-1"></i>清空选择
+                </button>
+            </div>
+        </div>
+    </header>
+
+    <!-- 主内容区 -->
+    <main class="container mx-auto px-4 py-6">
+        <!-- 笔记列表（按日期分组） -->
+        <div id="notes-container" class="space-y-6 mb-6">
+            <!-- 笔记分组将通过 JavaScript 动态生成 -->
+        </div>
+        
+        <!-- 空状态提示 -->
+        <div id="empty-state" class="hidden flex flex-col items-center justify-center py-16 text-center">
+            <div class="w-24 h-24 mb-4 text-gray-400">
+                <i class="fa fa-sticky-note-o text-6xl"></i>
+            </div>
+            <h2 class="text-xl font-semibold mb-2">还没有笔记</h2>
+            <p class="text-gray-500 mb-6 max-w-md">使用底部的快速输入框开始记录，支持快速添加时间间隔和笔记内容</p>
+        </div>
+    </main>
+
+    <!-- AI总结浮动按钮 -->
+    <div id="ai-summary-float-btn" class="fixed bottom-24 right-6 z-30 hidden">
+        <button class="btn btn-ai shadow-lg hover:shadow-xl transform hover:scale-105 transition-all duration-200">
+            <i class="fa fa-magic mr-2"></i>
+            <span>AI 总结</span>
+            <span id="selected-notes-count" class="ml-2 bg-white/20 px-2 py-0.5 rounded-full text-xs">0</span>
+        </button>
+    </div>
+
+    <!-- 底部快速输入区域 -->
+    <div class="sticky bottom-0 z-40 bg-white/90 backdrop-blur-md border-t border-gray-200 py-3 shadow-lg">
+        <div class="container mx-auto px-4">
+            <div class="bg-gray-100 rounded-lg p-3 shadow-sm">
+                <h3 class="text-sm font-medium text-gray-700 mb-2">快速添加笔记</h3>
+                <form id="quick-add-form" class="quick-input-row">
+                    <!-- 日期（固定） -->
+                    <div class="col-span-3 md:col-span-2">
+                        <input type="text" id="quick-date" class="input-field text-center" readonly>
+                    </div>
+                    
+                    <!-- 时间间隔 -->
+                    <div class="col-span-4 md:col-span-3 flex gap-1">
+                        <input type="time" id="quick-time-start" class="input-field" required>
+                        <span class="flex items-center justify-center px-1">~</span>
+                        <input type="time" id="quick-time-end" class="input-field" required>
+                    </div>
+                    
+                    <!-- 标题内容 -->
+                    <div class="col-span-3 md:col-span-4">
+                        <input type="text" id="quick-content" class="input-field" placeholder="输入笔记标题" required>
+                    </div>
+                    
+                    <!-- 标签输入 -->
+                    <div class="col-span-1 md:col-span-2">
+                        <input type="text" id="quick-tag" class="input-field" placeholder="标签" maxlength="5">
+                    </div>
+                    
+                    <!-- 提交按钮 -->
+                    <div class="col-span-1">
+                        <button type="submit" class="btn btn-primary w-full">
+                            <i class="fa fa-plus"></i>
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <!-- AI 总结配置模态框 -->
+    <div id="ai-summary-modal" class="fixed inset-0 z-50 hidden overflow-y-auto">
+        <div class="flex items-center justify-center min-h-screen px-4 pt-4 pb-20 text-center sm:block sm:p-0">
+            <!-- 背景遮罩 -->
+            <div class="fixed inset-0 transition-opacity" aria-hidden="true">
+                <div class="absolute inset-0 bg-gray-500 opacity-75"></div>
+            </div>
+            
+            <!-- 模态框内容 -->
+            <div class="inline-block overflow-hidden text-left align-bottom transition-all transform bg-white rounded-lg shadow-xl sm:my-8 sm:align-middle sm:max-w-4xl sm:w-full">
+                <div class="px-4 pt-5 pb-4 bg-white sm:p-6 sm:pb-4">
+                    <div class="sm:flex sm:items-start">
+                        <div class="mt-3 text-center sm:mt-0 sm:ml-4 sm:text-left w-full">
+                            <div class="flex justify-between items-center mb-4">
+                                <h3 class="text-lg font-medium leading-6 text-gray-900">AI 笔记总结</h3>
+                                <span class="text-sm text-ai font-medium">
+                                    <i class="fa fa-magic mr-1"></i>
+                                    选中 <span id="modal-selected-count">0</span> 条笔记
+                                </span>
+                            </div>
+                            
+                            <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                                <!-- 左侧：选中的笔记预览 -->
+                                <div>
+                                    <h4 class="text-sm font-medium text-gray-700 mb-3">选中的笔记</h4>
+                                    <div id="selected-notes-preview" class="space-y-2 max-h-96 overflow-y-auto p-2 border border-gray-200 rounded-md">
+                                        <!-- 选中的笔记将通过 JS 动态生成 -->
+                                    </div>
+                                    <p class="text-xs text-gray-500 mt-2">
+                                        <i class="fa fa-info-circle mr-1"></i>
+                                        点击笔记右侧的 <i class="fa fa-times text-red-500"></i> 可以取消选择
+                                    </p>
+                                </div>
+                                
+                                <!-- 右侧：总结配置 -->
+                                <div>
+                                    <h4 class="text-sm font-medium text-gray-700 mb-3">总结配置</h4>
+                                    <div class="space-y-4">
+                                        <!-- 总结风格 -->
+                                        <div>
+                                            <label class="block text-sm font-medium text-gray-700 mb-1">总结风格</label>
+                                            <div class="grid grid-cols-2 gap-2">
+                                                <label class="flex items-center p-2 border rounded cursor-pointer hover:bg-gray-50">
+                                                    <input type="radio" name="summary-style" value="简洁摘要" class="mr-2" checked>
+                                                    <span class="text-sm">简洁摘要</span>
+                                                </label>
+                                                <label class="flex items-center p-2 border rounded cursor-pointer hover:bg-gray-50">
+                                                    <input type="radio" name="summary-style" value="详细报告" class="mr-2">
+                                                    <span class="text-sm">详细报告</span>
+                                                </label>
+                                                <label class="flex items-center p-2 border rounded cursor-pointer hover:bg-gray-50">
+                                                    <input type="radio" name="summary-style" value="要点列表" class="mr-2">
+                                                    <span class="text-sm">要点列表</span>
+                                                </label>
+                                                <label class="flex items-center p-2 border rounded cursor-pointer hover:bg-gray-50">
+                                                    <input type="radio" name="summary-style" value="时间线整理" class="mr-2">
+                                                    <span class="text-sm">时间线整理</span>
+                                                </label>
+                                            </div>
+                                        </div>
+                                        
+                                        <!-- 输出格式 -->
+                                        <div>
+                                            <label class="block text-sm font-medium text-gray-700 mb-1">输出格式</label>
+                                            <div class="flex space-x-2">
+                                                <label class="flex items-center p-2 border rounded cursor-pointer hover:bg-gray-50 flex-1">
+                                                    <input type="radio" name="output-format" value="纯文本" class="mr-2" checked>
+                                                    <span class="text-sm">纯文本</span>
+                                                </label>
+                                                <label class="flex items-center p-2 border rounded cursor-pointer hover:bg-gray-50 flex-1">
+                                                    <input type="radio" name="output-format" value="Markdown格式" class="mr-2">
+                                                    <span class="text-sm">Markdown</span>
+                                                </label>
+                                                <label class="flex items-center p-2 border rounded cursor-pointer hover:bg-gray-50 flex-1">
+                                                    <input type="radio" name="output-format" value="HTML格式" class="mr-2">
+                                                    <span class="text-sm">HTML</span>
+                                                </label>
+                                            </div>
+                                        </div>
+                                        
+                                        <!-- 自定义提示词 -->
+                                        <div>
+                                            <label for="custom-prompt" class="block text-sm font-medium text-gray-700 mb-1">
+                                                自定义提示词
+                                                <span class="text-gray-500 font-normal">（可选）</span>
+                                            </label>
+                                            <textarea id="custom-prompt" rows="3" class="textarea-field" placeholder="例如：请重点关注时间安排和任务优先级..."></textarea>
+                                        </div>
+                                        
+                                        <!-- API 配置（可折叠） -->
+                                        <div>
+                                            <button type="button" id="toggle-api-config" class="text-sm text-gray-600 hover:text-gray-800 mb-2">
+                                                <i class="fa fa-cog mr-1"></i>
+                                                高级设置 <i class="fa fa-chevron-down ml-1"></i>
+                                            </button>
+                                            <div id="api-config-section" class="hidden space-y-3 p-3 border border-gray-200 rounded-md">
+                                                <div>
+                                                    <label for="api-key" class="block text-xs font-medium text-gray-700 mb-1">
+                                                        DeepSeek API 密钥
+                                                        <span class="text-red-500">*</span>
+                                                    </label>
+                                                    <div class="flex space-x-2">
+                                                        <input type="password" id="api-key" class="input-field flex-1" placeholder="sk-...">
+                                                        <button type="button" id="toggle-api-key" class="btn btn-secondary text-xs">
+                                                            <i class="fa fa-eye"></i>
+                                                        </button>
+                                                    </div>
+                                                    <p class="text-xs text-gray-500 mt-1">
+                                                        密钥仅保存在本地，不会发送到其他服务器
+                                                    </p>
+                                                </div>
+                                                
+                                                <div class="grid grid-cols-2 gap-3">
+                                                    <div>
+                                                        <label for="model" class="block text-xs font-medium text-gray-700 mb-1">模型</label>
+                                                        <select id="model" class="input-field text-sm">
+                                                            <option value="deepseek-chat">deepseek-chat</option>
+                                                            <option value="deepseek-coder">deepseek-coder</option>
+                                                        </select>
+                                                    </div>
+                                                    <div>
+                                                        <label for="temperature" class="block text-xs font-medium text-gray-700 mb-1">
+                                                            温度: <span id="temp-value">0.7</span>
+                                                        </label>
+                                                        <input type="range" id="temperature" min="0" max="1" step="0.1" value="0.7" class="w-full">
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- 模态框底部按钮 -->
+                <div class="px-4 py-3 bg-gray-50 sm:px-6 sm:flex sm:flex-row-reverse">
+                    <button type="button" id="generate-summary-btn" class="btn btn-ai">
+                        <i class="fa fa-magic mr-2"></i>
+                        生成总结
+                    </button>
+                    <button type="button" id="cancel-summary-btn" class="btn btn-secondary ml-3">
+                        取消
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- AI 总结结果模态框 -->
+    <div id="ai-result-modal" class="fixed inset-0 z-50 hidden overflow-y-auto">
+        <div class="flex items-center justify-center min-h-screen px-4 pt-4 pb-20 text-center sm:block sm:p-0">
+            <!-- 背景遮罩 -->
+            <div class="fixed inset-0 transition-opacity" aria-hidden="true">
+                <div class="absolute inset-0 bg-gray-500 opacity-75"></div>
+            </div>
+            
+            <!-- 模态框内容 -->
+            <div class="inline-block overflow-hidden text-left align-bottom transition-all transform bg-white rounded-lg shadow-xl sm:my-8 sm:align-middle sm:max-w-4xl sm:w-full">
+                <div class="px-4 pt-5 pb-4 bg-white sm:p-6 sm:pb-4">
+                    <div class="sm:flex sm:items-start">
+                        <div class="mt-3 text-center sm:mt-0 sm:ml-4 sm:text-left w-full">
+                            <div class="flex justify-between items-center mb-4">
+                                <div>
+                                    <h3 class="text-lg font-medium leading-6 text-gray-900">AI 总结结果</h3>
+                                    <p class="text-sm text-gray-500">基于 <span id="result-note-count">0</span> 条笔记生成</p>
+                                </div>
+                                <div class="flex items-center space-x-2">
+                                    <span id="summary-stats" class="text-xs text-gray-500"></span>
+                                    <span class="ai-tag">
+                                        <i class="fa fa-magic mr-1"></i>AI 总结
+                                    </span>
+                                </div>
+                            </div>
+                            
+                            <!-- 加载状态 -->
+                            <div id="summary-loading" class="hidden flex flex-col items-center justify-center py-8">
+                                <div class="animate-pulse mb-4">
+                                    <i class="fa fa-magic text-4xl text-ai"></i>
+                                </div>
+                                <p class="text-gray-600">AI 正在思考中，请稍候...</p>
+                                <p class="text-sm text-gray-500 mt-2">这可能需要几秒钟时间</p>
+                            </div>
+                            
+                            <!-- 结果内容 -->
+                            <div id="summary-content" class="hidden">
+                                <div class="prose max-w-none">
+                                    <div id="summary-text" class="p-4 border border-gray-200 rounded-md bg-gray-50 max-h-96 overflow-y-auto">
+                                        <!-- AI 总结内容将通过 JS 动态填充 -->
+                                    </div>
+                                </div>
+                                
+                                <!-- 操作按钮 -->
+                                <div class="mt-6 flex flex-wrap gap-2">
+                                    <button id="copy-summary-btn" class="btn btn-secondary">
+                                        <i class="fa fa-copy mr-2"></i>复制到剪贴板
+                                    </button>
+                                    <button id="save-as-note-btn" class="btn btn-primary">
+                                        <i class="fa fa-save mr-2"></i>保存为新笔记
+                                    </button>
+                                    <button id="regenerate-summary-btn" class="btn btn-secondary">
+                                        <i class="fa fa-refresh mr-2"></i>重新生成
+                                    </button>
+                                    <button id="adjust-config-btn" class="btn btn-secondary">
+                                        <i class="fa fa-cog mr-2"></i>调整配置
+                                    </button>
+                                </div>
+                            </div>
+                            
+                            <!-- 错误状态 -->
+                            <div id="summary-error" class="hidden flex flex-col items-center justify-center py-8">
+                                <div class="text-red-500 mb-4">
+                                    <i class="fa fa-exclamation-triangle text-4xl"></i>
+                                </div>
+                                <h4 class="text-lg font-medium text-gray-900 mb-2">生成失败</h4>
+                                <p id="error-message" class="text-gray-600 mb-4"></p>
+                                <div class="flex space-x-3">
+                                    <button id="retry-summary-btn" class="btn btn-primary">
+                                        <i class="fa fa-refresh mr-2"></i>重试
+                                    </button>
+                                    <button id="back-to-config-btn" class="btn btn-secondary">
+                                        <i class="fa fa-arrow-left mr-2"></i>返回配置
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 编辑笔记模态框 -->
+    <div id="note-modal" class="fixed inset-0 z-50 hidden overflow-y-auto">
+        <div class="flex items-center justify-center min-h-screen px-4 pt-4 pb-20 text-center sm:block sm:p-0">
+            <div class="fixed inset-0 transition-opacity" aria-hidden="true">
+                <div class="absolute inset-0 bg-gray-500 opacity-75"></div>
+            </div>
+            <div class="inline-block overflow-hidden text-left align-bottom transition-all transform bg-white rounded-lg shadow-xl sm:my-8 sm:align-middle sm:max-w-lg sm:w-full">
+                <div class="px-4 pt-5 pb-4 bg-white sm:p-6 sm:pb-4">
+                    <div class="sm:flex sm:items-start">
+                        <div class="mt-3 text-center sm:mt-0 sm:ml-4 sm:text-left w-full">
+                            <h3 class="text-lg font-medium leading-6 text-gray-900" id="note-modal-title">编辑笔记</h3>
+                            <div class="mt-4">
+                                <form id="note-form">
+                                    <input type="hidden" id="note-id">
+                                    <div class="mb-3">
+                                        <label for="note-date" class="block text-sm font-medium text-gray-700 mb-1">日期</label>
+                                        <input type="date" id="note-date" class="input-field" required>
+                                    </div>
+                                    <div class="grid grid-cols-2 gap-2 mb-3">
+                                        <div>
+                                            <label for="note-time-start" class="block text-sm font-medium text-gray-700 mb-1">开始时间</label>
+                                            <input type="time" id="note-time-start" class="input-field" required>
+                                        </div>
+                                        <div>
+                                            <label for="note-time-end" class="block text-sm font-medium text-gray-700 mb-1">结束时间</label>
+                                            <input type="time" id="note-time-end" class="input-field" required>
+                                        </div>
+                                    </div>
+                                    <div class="mb-3">
+                                        <label for="note-content" class="block text-sm font-medium text-gray-700 mb-1">内容</label>
+                                        <textarea id="note-content" rows="4" class="textarea-field" required></textarea>
+                                    </div>
+                                    <div class="mb-3">
+                                        <label for="note-tag" class="block text-sm font-medium text-gray-700 mb-1">标签</label>
+                                        <input type="text" id="note-tag" class="input-field" maxlength="5">
+                                    </div>
+                                </form>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="px-4 py-3 bg-gray-50 sm:px-6 sm:flex sm:flex-row-reverse">
+                    <button type="button" id="save-note-btn" class="btn btn-primary">保存</button>
+                    <button type="button" id="cancel-note-btn" class="btn btn-secondary ml-3">取消</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 右键菜单 -->
+    <div id="context-menu" class="hidden fixed z-50 w-48 bg-white/70 backdrop-blur-md rounded-md shadow-lg py-1">
+        <button class="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100" id="edit-note-menu-btn">
+            <i class="fa fa-pencil mr-2"></i> 编辑
+        </button>
+        <button class="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100" id="duplicate-note-menu-btn">
+            <i class="fa fa-clone mr-2"></i> 复制
+        </button>
+        <div class="border-t border-gray-200"></div>
+        <button class="w-full text-left px-4 py-2 text-sm text-red-600 hover:bg-gray-100" id="delete-note-menu-btn">
+            <i class="fa fa-trash mr-2"></i> 删除
+        </button>
+    </div>
+
+    <!-- 确认删除模态框 -->
+    <div id="delete-modal" class="fixed inset-0 z-50 hidden overflow-y-auto">
+        <div class="flex items-center justify-center min-h-screen px-4 pt-4 pb-20 text-center sm:block sm:p-0">
+            <div class="fixed inset-0 transition-opacity" aria-hidden="true">
+                <div class="absolute inset-0 bg-gray-500 opacity-75"></div>
+            </div>
+            <div class="inline-block overflow-hidden text-left align-bottom transition-all transform bg-white rounded-lg shadow-xl sm:my-8 sm:align-middle sm:max-w-sm sm:w-full">
+                <div class="px-4 pt-5 pb-4 bg-white sm:p-6 sm:pb-4">
+                    <div class="sm:flex sm:items-start">
+                        <div class="mt-3 text-center sm:mt-0 sm:ml-4 sm:text-left">
+                            <h3 class="text-lg font-medium leading-6 text-gray-900">确认删除</h3>
+                            <div class="mt-2">
+                                <p class="text-sm text-gray-500">
+                                    确定要删除这条笔记吗？此操作无法撤销。
+                                </p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="px-4 py-3 bg-gray-50 sm:px-6 sm:flex sm:flex-row-reverse">
+                    <button type="button" id="confirm-delete-btn" class="btn btn-danger">删除</button>
+                    <button type="button" id="cancel-delete-btn" class="btn btn-secondary ml-3">取消</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 保存状态提示 -->
+    <div id="save-indicator" class="fixed bottom-20 right-4 bg-white/70 backdrop-blur-md px-4 py-2 rounded-md shadow-lg flex items-center space-x-2 transform translate-y-10 opacity-0 transition-all duration-300">
+        <i class="fa fa-check-circle text-green-500"></i>
+        <span>已保存</span>
+    </div>
+
+    <!-- 操作提示 -->
+    <div id="selection-hint" class="fixed bottom-20 left-4 bg-white/70 backdrop-blur-md px-4 py-2 rounded-md shadow-lg text-sm hidden">
+        <p class="text-gray-700">
+            <span class="font-medium">选择笔记：</span>
+            <span class="text-gray-600">Ctrl+点击选择单个，Shift+点击选择区间</span>
+        </p>
+    </div>
+
+    <!-- JavaScript -->
+    <script>
+        // 全局变量
+        let notes = [];
+        let currentNoteId = null;
+        let lastEndTime = null;
+        
+        // AI 总结相关全局变量
+        let selectedNotes = new Set();
+        let lastClickedNoteId = null;
+        let currentSummaryConfig = {};
+        let currentSummaryResult = null;
+        
+        // DOM 元素
+        const notesContainer = document.getElementById('notes-container');
+        const emptyState = document.getElementById('empty-state');
+        const noteModal = document.getElementById('note-modal');
+        const contextMenu = document.getElementById('context-menu');
+        const deleteModal = document.getElementById('delete-modal');
+        const saveIndicator = document.getElementById('save-indicator');
+        const quickAddForm = document.getElementById('quick-add-form');
+        
+        // AI 总结相关 DOM 元素
+        const aiSummaryFloatBtn = document.getElementById('ai-summary-float-btn');
+        const selectionInfo = document.getElementById('selection-info');
+        const selectedCount = document.getElementById('selected-count');
+        const clearSelectionBtn = document.getElementById('clear-selection-btn');
+        const selectedNotesCount = document.getElementById('selected-notes-count');
+        const aiSummaryModal = document.getElementById('ai-summary-modal');
+        const aiResultModal = document.getElementById('ai-result-modal');
+        const modalSelectedCount = document.getElementById('modal-selected-count');
+        const selectedNotesPreview = document.getElementById('selected-notes-preview');
+        const generateSummaryBtn = document.getElementById('generate-summary-btn');
+        const cancelSummaryBtn = document.getElementById('cancel-summary-btn');
+        const summaryLoading = document.getElementById('summary-loading');
+        const summaryContent = document.getElementById('summary-content');
+        const summaryText = document.getElementById('summary-text');
+        const resultNoteCount = document.getElementById('result-note-count');
+        const summaryStats = document.getElementById('summary-stats');
+        const summaryError = document.getElementById('summary-error');
+        const errorMessage = document.getElementById('error-message');
+        const selectionHint = document.getElementById('selection-hint');
+        
+        // 初始化应用
+        document.addEventListener('DOMContentLoaded', () => {
+            initQuickInput();
+            loadNotes();
+            renderNotes();
+            bindEventListeners();
+            bindAIEventListeners();
+            loadApiConfig();
+            
+            // 显示选择提示
+            setTimeout(() => {
+                selectionHint.classList.remove('hidden');
+                setTimeout(() => selectionHint.classList.add('hidden'), 5000);
+            }, 1000);
+        });
+        
+        // 初始化快速输入框
+        function initQuickInput() {
+            const today = new Date();
+            const formattedDate = today.toISOString().split('T')[0];
+            document.getElementById('quick-date').value = formattedDate;
+            
+            // 设置默认时间
+            const now = new Date();
+            const hours = String(now.getHours()).padStart(2, '0');
+            const minutes = String(now.getMinutes()).padStart(2, '0');
+            document.getElementById('quick-time-start').value = `${hours}:${minutes}`;
+            
+            // 设置结束时间为开始时间加30分钟
+            now.setMinutes(now.getMinutes() + 30);
+            const endHours = String(now.getHours()).padStart(2, '0');
+            const endMinutes = String(now.getMinutes()).padStart(2, '0');
+            document.getElementById('quick-time-end').value = `${endHours}:${endMinutes}`;
+        }
+        
+        // 加载笔记
+        function loadNotes() {
+            const savedNotes = localStorage.getItem('notes');
+            notes = savedNotes ? JSON.parse(savedNotes) : [];
+        }
+        
+        // 保存笔记
+        function saveNotes() {
+            localStorage.setItem('notes', JSON.stringify(notes));
+            showSaveIndicator();
+        }
+        
+        // 显示保存提示
+        function showSaveIndicator() {
+            saveIndicator.classList.remove('translate-y-10', 'opacity-0');
+            setTimeout(() => {
+                saveIndicator.classList.add('translate-y-10', 'opacity-0');
+            }, 2000);
+        }
+        
+        // 渲染笔记
+        function renderNotes() {
+            notesContainer.innerHTML = '';
+            
+            if (notes.length === 0) {
+                emptyState.classList.remove('hidden');
+                return;
+            }
+            
+            emptyState.classList.add('hidden');
+            
+            // 按日期分组
+            const notesByDate = {};
+            notes.forEach(note => {
+                if (!notesByDate[note.date]) {
+                    notesByDate[note.date] = [];
+                }
+                notesByDate[note.date].push(note);
+            });
+            
+            // 获取所有日期并按降序排序
+            const sortedDates = Object.keys(notesByDate).sort((a, b) => new Date(b) - new Date(a));
+            
+            // 按周分组
+            const notesByWeek = {};
+            sortedDates.forEach(date => {
+                const dateObj = new Date(date);
+                const year = dateObj.getFullYear();
+                const week = getWeekNumber(dateObj);
+                const weekKey = `${year}-W${week}`;
+                
+                if (!notesByWeek[weekKey]) {
+                    notesByWeek[weekKey] = {
+                        year,
+                        week,
+                        dates: [],
+                        notes: []
+                    };
+                }
+                
+                notesByWeek[weekKey].dates.push(date);
+                notesByWeek[weekKey].notes.push(...notesByDate[date]);
+            });
+            
+            // 获取所有周并按降序排序
+            const sortedWeeks = Object.keys(notesByWeek).sort((a, b) => {
+                const [aYear, aWeek] = a.split('-W').map(Number);
+                const [bYear, bWeek] = b.split('-W').map(Number);
+                if (aYear !== bYear) return bYear - aYear;
+                return bWeek - aWeek;
+            });
+            
+            // 渲染每周笔记
+            sortedWeeks.forEach(weekKey => {
+                const weekGroup = notesByWeek[weekKey];
+                const firstDate = new Date(weekGroup.dates[0]);
+                const month = firstDate.getMonth();
+                const monthColor = getComputedStyle(document.documentElement).getPropertyValue(`--tw-color-month-${month}`) || 
+                                 `rgb(var(--color-month-${month}), 1)`;
+                
+                // 检查是否是完整周（7天）
+                const isFullWeek = weekGroup.dates.length === 7;
+                
+                // 创建周容器
+                const weekContainer = document.createElement('div');
+                weekContainer.className = 'mb-8 animate-fade-in';
+                
+                // 周标题
+                const weekHeader = document.createElement('h2');
+                weekHeader.className = 'text-lg font-semibold mb-3 text-gray-800';
+                weekHeader.textContent = `${weekGroup.year}年 第${weekGroup.week}周`;
+                weekContainer.appendChild(weekHeader);
+                
+                // 创建笔记容器（带周线）
+                const notesWrapper = document.createElement('div');
+                notesWrapper.className = 'week-line-container';
+                
+                // 如果是完整周，添加左侧线
+                if (isFullWeek) {
+                    const weekLine = document.createElement('div');
+                    weekLine.className = 'week-line';
+                    weekLine.style.backgroundColor = getMonthColor(month);
+                    notesWrapper.appendChild(weekLine);
+                }
+                
+                // 按日期渲染每日笔记
+                weekGroup.dates.forEach(date => {
+                    const dateNotes = notesByDate[date];
+                    
+                    // 日期标题
+                    const dateHeader = document.createElement('h3');
+                    dateHeader.className = 'text-md font-medium mb-2 mt-4 text-gray-700';
+                    dateHeader.textContent = formatDate(date);
+                    notesWrapper.appendChild(dateHeader);
+                    
+                    // 笔记列表
+                    const dateNotesContainer = document.createElement('div');
+                    dateNotesContainer.className = 'grid grid-cols-1 gap-2';
+                    
+                    dateNotes.forEach(note => {
+                        dateNotesContainer.appendChild(createNoteElement(note));
+                    });
+                    
+                    notesWrapper.appendChild(dateNotesContainer);
+                });
+                
+                weekContainer.appendChild(notesWrapper);
+                notesContainer.appendChild(weekContainer);
+            });
+        }
+        
+        // 获取月份颜色
+        function getMonthColor(month) {
+            const monthColors = [
+                '#3b82f6', '#10b981', '#f59e0b', '#ef4444', 
+                '#8b5cf6', '#ec4899', '#6366f1', '#14b8a6',
+                '#f97316', '#84cc16', '#6b7280', '#0ea5e9'
+            ];
+            return monthColors[month % 12];
+        }
+        
+        // 获取周数
+        function getWeekNumber(date) {
+            const firstDayOfYear = new Date(date.getFullYear(), 0, 1);
+            const pastDaysOfYear = (date - firstDayOfYear) / 86400000;
+            return Math.ceil((pastDaysOfYear + firstDayOfYear.getDay() + 1) / 7);
+        }
+        
+        // 创建笔记元素
+        function createNoteElement(note) {
+            const noteElement = document.createElement('div');
+            noteElement.className = `note-card ${selectedNotes.has(note.id) ? 'selected' : ''}`;
+            noteElement.dataset.noteId = note.id;
+            
+            // 根据标签设置左侧边框颜色
+            const tagColor = getTagColor(note.tag);
+            noteElement.style.borderLeftColor = tagColor;
+            
+            // 笔记内容
+            noteElement.innerHTML = `
+                <div class="flex justify-between items-start">
+                    <div>
+                        <div class="text-sm font-medium text-gray-900">${note.content}</div>
+                        <div class="flex items-center mt-1">
+                            <span class="text-xs text-gray-500">${note.timeStart} ~ ${note.timeEnd}</span>
+                            ${note.tag ? `<span class="tag ml-2">${note.tag}</span>` : ''}
+                            ${note.isAI ? `<span class="ai-tag ml-2"><i class="fa fa-magic mr-1"></i>AI</span>` : ''}
+                        </div>
+                    </div>
+                    <button class="expand-btn ml-2 opacity-0 hover:opacity-100 transition-opacity">
+                        <i class="fa fa-ellipsis-v"></i>
+                    </button>
+                </div>
+            `;
+            
+            // 添加事件监听器
+            noteElement.addEventListener('click', (e) => {
+                if (e.ctrlKey || e.metaKey || e.shiftKey) {
+                    handleNoteSelection(e, note.id);
+                } else {
+                    openNoteModal(note.id);
+                }
+            });
+            
+            // 右键菜单
+            noteElement.addEventListener('contextmenu', (e) => {
+                e.preventDefault();
+                showContextMenu(e, note.id);
+            });
+            
+            return noteElement;
+        }
+        
+        // 获取标签颜色
+        function getTagColor(tag) {
+            if (!tag) return '#9ca3af'; // 默认灰色
+            
+            // 简单的哈希函数将标签映射到颜色
+            let hash = 0;
+            for (let i = 0; i < tag.length; i++) {
+                hash = tag.charCodeAt(i) + ((hash << 5) - hash);
+            }
+            
+            // 预设颜色数组
+            const colors = [
+                '#3b82f6', '#10b981', '#f59e0b', '#ef4444', 
+                '#8b5cf6', '#ec4899', '#6366f1', '#14b8a6'
+            ];
+            
+            return colors[Math.abs(hash) % colors.length];
+        }
+        
+        // 格式化日期
+        function formatDate(dateString) {
+            const date = new Date(dateString);
+            const year = date.getFullYear();
+            const month = date.getMonth() + 1;
+            const day = date.getDate();
+            const weekdays = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
+            const weekday = weekdays[date.getDay()];
+            
+            return `${year}年${month}月${day}日 ${weekday}`;
+        }
+        
+        // 绑定事件监听器
+        function bindEventListeners() {
+            // 快速添加笔记表单
+            quickAddForm.addEventListener('submit', (e) => {
+                e.preventDefault();
+                addQuickNote();
+            });
+            
+            // 关闭右键菜单
+            document.addEventListener('click', () => {
+                contextMenu.classList.add('hidden');
+            });
+            
+            // 编辑笔记菜单
+            document.getElementById('edit-note-menu-btn').addEventListener('click', () => {
+                contextMenu.classList.add('hidden');
+                if (currentNoteId) openNoteModal(currentNoteId);
+            });
+            
+            // 复制笔记菜单
+            document.getElementById('duplicate-note-menu-btn').addEventListener('click', () => {
+                contextMenu.classList.add('hidden');
+                if (currentNoteId) duplicateNote(currentNoteId);
+            });
+            
+            // 删除笔记菜单
+            document.getElementById('delete-note-menu-btn').addEventListener('click', () => {
+                contextMenu.classList.add('hidden');
+                if (currentNoteId) openDeleteModal(currentNoteId);
+            });
+            
+            // 取消删除
+            document.getElementById('cancel-delete-btn').addEventListener('click', () => {
+                deleteModal.classList.add('hidden');
+            });
+            
+            // 确认删除
+            document.getElementById('confirm-delete-btn').addEventListener('click', () => {
+                if (currentNoteId) deleteNote(currentNoteId);
+                deleteModal.classList.add('hidden');
+            });
+            
+            // 取消笔记编辑
+            document.getElementById('cancel-note-btn').addEventListener('click', () => {
+                noteModal.classList.add('hidden');
+            });
+            
+            // 保存笔记
+            document.getElementById('save-note-btn').addEventListener('click', saveNoteChanges);
+            
+            // 关闭模态框
+            noteModal.addEventListener('click', (e) => {
+                if (e.target === noteModal) noteModal.classList.add('hidden');
+            });
+            
+            deleteModal.addEventListener('click', (e) => {
+                if (e.target === deleteModal) deleteModal.classList.add('hidden');
+            });
+        }
+        
+        // 显示右键菜单
+        function showContextMenu(event, noteId) {
+            currentNoteId = noteId;
+            contextMenu.style.top = `${event.pageY}px`;
+            contextMenu.style.left = `${event.pageX}px`;
+            contextMenu.classList.remove('hidden');
+        }
+        
+        // 添加快速笔记
+        function addQuickNote() {
+            const date = document.getElementById('quick-date').value;
+            const timeStart = document.getElementById('quick-time-start').value;
+            const timeEnd = document.getElementById('quick-time-end').value;
+            const content = document.getElementById('quick-content').value;
+            const tag = document.getElementById('quick-tag').value.trim();
+            
+            const newNote = {
+                id: Date.now().toString(),
+                date,
+                timeStart,
+                timeEnd,
+                content,
+                tag,
+                isAI: false
+            };
+            
+            notes.unshift(newNote);
+            saveNotes();
+            renderNotes();
+            
+            // 清空内容和标签
+            document.getElementById('quick-content').value = '';
+            document.getElementById('quick-tag').value = '';
+            
+            // 自动设置下一个时间
+            document.getElementById('quick-time-start').value = timeEnd;
+            const endTime = new Date(`1970-01-01T${timeEnd}`);
+            endTime.setMinutes(endTime.getMinutes() + 30);
+            const nextEndHours = String(endTime.getHours()).padStart(2, '0');
+            const nextEndMinutes = String(endTime.getMinutes()).padStart(2, '0');
+            document.getElementById('quick-time-end').value = `${nextEndHours}:${nextEndMinutes}`;
+        }
+        
+        // 打开笔记编辑模态框
+        function openNoteModal(noteId) {
+            const note = notes.find(n => n.id === noteId);
+            if (!note) return;
+            
+            currentNoteId = noteId;
+            document.getElementById('note-id').value = note.id;
+            document.getElementById('note-date').value = note.date;
+            document.getElementById('note-time-start').value = note.timeStart;
+            document.getElementById('note-time-end').value = note.timeEnd;
+            document.getElementById('note-content').value = note.content;
+            document.getElementById('note-tag').value = note.tag || '';
+            
+            noteModal.classList.remove('hidden');
+        }
+        
+        // 保存笔记更改
+        function saveNoteChanges() {
+            const noteId = document.getElementById('note-id').value;
+            const noteIndex = notes.findIndex(n => n.id === noteId);
+            if (noteIndex === -1) return;
+            
+            notes[noteIndex] = {
+                ...notes[noteIndex],
+                date: document.getElementById('note-date').value,
+                timeStart: document.getElementById('note-time-start').value,
+                timeEnd: document.getElementById('note-time-end').value,
+                content: document.getElementById('note-content').value,
+                tag: document.getElementById('note-tag').value.trim()
+            };
+            
+            saveNotes();
+            renderNotes();
+            noteModal.classList.add('hidden');
+        }
+        
+        // 复制笔记
+        function duplicateNote(noteId) {
+            const note = notes.find(n => n.id === noteId);
+            if (!note) return;
+            
+            const newNote = {
+                ...note,
+                id: Date.now().toString(),
+                content: `${note.content} (副本)`,
+                isAI: false
+            };
+            
+            notes.unshift(newNote);
+            saveNotes();
+            renderNotes();
+        }
+        
+        // 打开删除确认模态框
+        function openDeleteModal(noteId) {
+            currentNoteId = noteId;
+            deleteModal.classList.remove('hidden');
+        }
+        
+        // 删除笔记
+        function deleteNote(noteId) {
+            notes = notes.filter(n => n.id !== noteId);
+            selectedNotes.delete(noteId);
+            saveNotes();
+            renderNotes();
+            updateSelectionUI();
+        }
+        
+        // ============ AI 总结功能 ============
+        
+        // 绑定 AI 相关事件监听器
+        function bindAIEventListeners() {
+            // AI 总结浮动按钮
+            aiSummaryFloatBtn.addEventListener('click', openAISummaryModal);
+            
+            // 清空选择按钮
+            clearSelectionBtn.addEventListener('click', clearSelection);
+            
+            // AI 总结模态框
+            cancelSummaryBtn.addEventListener('click', closeAISummaryModal);
+            generateSummaryBtn.addEventListener('click', generateSummary);
+            
+            // API 配置切换
+            document.getElementById('toggle-api-config').addEventListener('click', toggleApiConfig);
+            document.getElementById('toggle-api-key').addEventListener('click', toggleApiKeyVisibility);
+            document.getElementById('temperature').addEventListener('input', updateTemperatureValue);
+            
+            // 结果模态框按钮
+            document.getElementById('copy-summary-btn').addEventListener('click', copySummaryToClipboard);
+            document.getElementById('save-as-note-btn').addEventListener('click', saveSummaryAsNote);
+            document.getElementById('regenerate-summary-btn').addEventListener('click', regenerateSummary);
+            document.getElementById('adjust-config-btn').addEventListener('click', backToConfig);
+            document.getElementById('retry-summary-btn').addEventListener('click', retrySummary);
+            document.getElementById('back-to-config-btn').addEventListener('click', backToConfig);
+            
+            // 关闭模态框
+            aiSummaryModal.addEventListener('click', (e) => {
+                if (e.target === aiSummaryModal) closeAISummaryModal();
+            });
+            aiResultModal.addEventListener('click', (e) => {
+                if (e.target === aiResultModal) closeAIResultModal();
+            });
+        }
+        
+        // 加载 API 配置
+        function loadApiConfig() {
+            const savedApiKey = localStorage.getItem('deepseek_api_key');
+            if (savedApiKey) {
+                document.getElementById('api-key').value = savedApiKey;
+            }
+        }
+        
+        // 切换 API 配置显示
+        function toggleApiConfig() {
+            const section = document.getElementById('api-config-section');
+            const icon = this.querySelector('i.fa-chevron-down');
+            section.classList.toggle('hidden');
+            icon.classList.toggle('fa-chevron-down');
+            icon.classList.toggle('fa-chevron-up');
+        }
+        
+        // 切换 API 密钥显示
+        function toggleApiKeyVisibility() {
+            const apiKeyInput = document.getElementById('api-key');
+            const icon = this.querySelector('i');
+            if (apiKeyInput.type === 'password') {
+                apiKeyInput.type = 'text';
+                icon.classList.remove('fa-eye');
+                icon.classList.add('fa-eye-slash');
+            } else {
+                apiKeyInput.type = 'password';
+                icon.classList.remove('fa-eye-slash');
+                icon.classList.add('fa-eye');
+            }
+        }
+        
+        // 更新温度值显示
+        function updateTemperatureValue() {
+            document.getElementById('temp-value').textContent = this.value;
+        }
+        
+        // 笔记选择功能
+        function handleNoteSelection(event, noteId) {
+            event.preventDefault();
+            
+            if (event.ctrlKey || event.metaKey) {
+                toggleNoteSelection(noteId);
+                lastClickedNoteId = noteId;
+                return;
+            }
+            
+            if (event.shiftKey && lastClickedNoteId !== null) {
+                selectNoteRange(lastClickedNoteId, noteId);
+                lastClickedNoteId = noteId;
+                return;
+            }
+            
+            lastClickedNoteId = noteId;
+        }
+        
+        // 切换单个笔记选择状态
+        function toggleNoteSelection(noteId) {
+            if (selectedNotes.has(noteId)) {
+                selectedNotes.delete(noteId);
+                updateNoteSelectionUI(noteId, false);
+            } else {
+                selectedNotes.add(noteId);
+                updateNoteSelectionUI(noteId, true);
+            }
+            updateSelectionUI();
+        }
+        
+        // 选择笔记区间
+        function selectNoteRange(startNoteId, endNoteId) {
+            const noteElements = Array.from(notesContainer.querySelectorAll('.note-card'));
+            const noteIds = noteElements.map(el => el.dataset.noteId);
+            
+            const startIndex = noteIds.indexOf(startNoteId);
+            const endIndex = noteIds.indexOf(endNoteId);
+            
+            if (startIndex === -1 || endIndex === -1) return;
+            
+            const minIndex = Math.min(startIndex, endIndex);
+            const maxIndex = Math.max(startIndex, endIndex);
+            
+            for (let i = minIndex; i <= maxIndex; i++) {
+                const noteId = noteIds[i];
+                if (selectedNotes.has(noteId)) {
+                    selectedNotes.delete(noteId);
+                    updateNoteSelectionUI(noteId, false);
+                } else {
+                    selectedNotes.add(noteId);
+                    updateNoteSelectionUI(noteId, true);
+                }
+            }
+            
+            updateSelectionUI();
+        }
+        
+        // 更新笔记选择 UI
+        function updateNoteSelectionUI(noteId, isSelected) {
+            const noteElement = document.querySelector(`.note-card[data-note-id="${noteId}"]`);
+            if (noteElement) {
+                if (isSelected) {
+                    noteElement.classList.add('selected');
+                } else {
+                    noteElement.classList.remove('selected');
+                }
+            }
+        }
+        
+        // 更新选择 UI
+        function updateSelectionUI() {
+            const count = selectedNotes.size;
+            
+            selectedCount.textContent = `已选中 ${count} 条笔记`;
+            selectedNotesCount.textContent = count;
+            
+            if (count > 0) {
+                selectionInfo.classList.remove('hidden');
+                aiSummaryFloatBtn.classList.remove('hidden');
+                quickAddForm.querySelectorAll('input, button').forEach(el => {
+                    el.disabled = true;
+                });
+            } else {
+                selectionInfo.classList.add('hidden');
+                aiSummaryFloatBtn.classList.add('hidden');
+                quickAddForm.querySelectorAll('input, button').forEach(el => {
+                    el.disabled = false;
+                });
+            }
+        }
+        
+        // 清空选择
+        function clearSelection() {
+            selectedNotes.forEach(noteId => {
+                updateNoteSelectionUI(noteId, false);
+            });
+            selectedNotes.clear();
+            updateSelectionUI();
+        }
+        
+        // 打开 AI 总结模态框
+        function openAISummaryModal() {
+            const count = selectedNotes.size;
+            modalSelectedCount.textContent = count;
+            
+            // 渲染选中的笔记预览
+            selectedNotesPreview.innerHTML = '';
+            const selectedNoteList = Array.from(selectedNotes).map(id => notes.find(n => n.id === id));
+            
+            selectedNoteList.forEach(note => {
+                const previewItem = document.createElement('div');
+                previewItem.className = 'p-2 bg-gray-50 rounded border border-gray-200 flex justify-between items-start';
+                
+                const noteInfo = document.createElement('div');
+                noteInfo.className = 'flex-1 mr-2';
+                noteInfo.innerHTML = `
+                    <div class="text-sm font-medium">${note.content}</div>
+                    <div class="text-xs text-gray-500 mt-1">
+                        ${formatDate(note.date)} ${note.timeStart} ~ ${note.timeEnd}
+                        ${note.tag ? `<span class="tag ml-2">${note.tag}</span>` : ''}
+                    </div>
+                `;
+                
+                const removeBtn = document.createElement('button');
+                removeBtn.className = 'text-red-500 hover:text-red-700';
+                removeBtn.innerHTML = '<i class="fa fa-times"></i>';
+                removeBtn.addEventListener('click', () => {
+                    toggleNoteSelection(note.id);
+                    openAISummaryModal(); // 重新渲染预览
+                });
+                
+                previewItem.appendChild(noteInfo);
+                previewItem.appendChild(removeBtn);
+                selectedNotesPreview.appendChild(previewItem);
+            });
+            
+            aiSummaryModal.classList.remove('hidden');
+        }
+        
+        // 关闭 AI 总结模态框
+        function closeAISummaryModal() {
+            aiSummaryModal.classList.add('hidden');
+        }
+        
+        // 关闭 AI 结果模态框
+        function closeAIResultModal() {
+            aiResultModal.classList.add('hidden');
+        }
+        
+        // 生成总结
+        function generateSummary() {
+            // 保存配置
+            currentSummaryConfig = {
+                style: document.querySelector('input[name="summary-style"]:checked').value,
+                format: document.querySelector('input[name="output-format"]:checked').value,
+                customPrompt: document.getElementById('custom-prompt').value,
+                apiKey: document.getElementById('api-key').value,
+                model: document.getElementById('model').value,
+                temperature: parseFloat(document.getElementById('temperature').value)
+            };
+            
+            // 保存 API 密钥到本地存储
+            if (currentSummaryConfig.apiKey) {
+                localStorage.setItem('deepseek_api_key', currentSummaryConfig.apiKey);
+            }
+            
+            // 验证 API 密钥
+            if (!currentSummaryConfig.apiKey) {
+                alert('请输入 DeepSeek API 密钥');
+                return;
+            }
+            
+            // 获取选中的笔记
+            const selectedNoteList = Array.from(selectedNotes).map(id => notes.find(n => n.id === id));
+            if (selectedNoteList.length === 0) {
+                alert('请先选择笔记');
+                return;
+            }
+            
+            // 准备发送给 AI 的内容
+            let notesText = "以下是需要总结的笔记内容：\n\n";
+            selectedNoteList.forEach(note => {
+                notesText += `日期：${formatDate(note.date)}\n`;
+                notesText += `时间：${note.timeStart} ~ ${note.timeEnd}\n`;
+                notesText += `内容：${note.content}\n`;
+                if (note.tag) notesText += `标签：${note.tag}\n`;
+                notesText += "\n";
+            });
+            
+            // 构建提示词
+            let prompt = `请帮我总结以下笔记内容，要求：\n`;
+            prompt += `1. 总结风格：${currentSummaryConfig.style}\n`;
+            prompt += `2. 输出格式：${currentSummaryConfig.format}\n`;
+            
+            if (currentSummaryConfig.customPrompt) {
+                prompt += `3. 额外要求：${currentSummaryConfig.customPrompt}\n`;
+            }
+            
+            prompt += `\n${notesText}`;
+            
+            // 显示结果模态框和加载状态
+            aiSummaryModal.classList.add('hidden');
+            aiResultModal.classList.remove('hidden');
+            resultNoteCount.textContent = selectedNoteList.length;
+            summaryLoading.classList.remove('hidden');
+            summaryContent.classList.add('hidden');
+            summaryError.classList.add('hidden');
+            
+            // 调用 API 生成总结
+            fetch('https://api.deepseek.com/v1/chat/completions', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${currentSummaryConfig.apiKey}`
+                },
+                body: JSON.stringify({
+                    model: currentSummaryConfig.model,
+                    messages: [
+                        { role: 'system', content: '你是一个笔记总结助手，擅长将多条笔记内容进行归纳整理。' },
+                        { role: 'user', content: prompt }
+                    ],
+                    temperature: currentSummaryConfig.temperature
+                })
+            })
+            .then(response => {
+                if (!response.ok) throw new Error('API 请求失败: ' + response.status);
+                return response.json();
+            })
+            .then(data => {
+                if (!data.choices || data.choices.length === 0) {
+                    throw new Error('未获取到总结结果');
+                }
+                
+                currentSummaryResult = data.choices[0].message.content;
+                
+                // 更新 UI 显示结果
+                summaryLoading.classList.add('hidden');
+                summaryContent.classList.remove('hidden');
+                
+                // 根据格式显示内容
+                if (currentSummaryConfig.format === 'Markdown格式') {
+                    summaryText.innerHTML = `<pre class="whitespace-pre-wrap">${currentSummaryResult}</pre>`;
+                } else if (currentSummaryConfig.format === 'HTML格式') {
+                    summaryText.innerHTML = currentSummaryResult;
+                } else {
+                    summaryText.textContent = currentSummaryResult;
+                }
+                
+                // 更新统计信息
+                const wordCount = currentSummaryResult.length;
+                const noteCount = selectedNoteList.length;
+                summaryStats.textContent = `共 ${noteCount} 条笔记，总结约 ${wordCount} 字`;
+            })
+            .catch(error => {
+                summaryLoading.classList.add('hidden');
+                summaryError.classList.remove('hidden');
+                errorMessage.textContent = error.message || '生成总结时发生错误，请稍后重试';
+            });
+        }
+        
+        // 复制总结到剪贴板
+        function copySummaryToClipboard() {
+            if (currentSummaryResult) {
+                navigator.clipboard.writeText(currentSummaryResult).then(() => {
+                    alert('总结已复制到剪贴板');
+                }).catch(err => {
+                    console.error('无法复制内容: ', err);
+                    alert('复制失败，请手动复制');
+                });
+            }
+        }
+        
+        // 保存总结为新笔记
+        function saveSummaryAsNote() {
+            if (!currentSummaryResult) return;
+            
+            const today = new Date().toISOString().split('T')[0];
+            const now = new Date();
+            const hours = String(now.getHours()).padStart(2, '0');
+            const minutes = String(now.getMinutes()).padStart(2, '0');
+            const timeStart = `${hours}:${minutes}`;
+            
+            now.setMinutes(now.getMinutes() + 5);
+            const endHours = String(now.getHours()).padStart(2, '0');
+            const endMinutes = String(now.getMinutes()).padStart(2, '0');
+            const timeEnd = `${endHours}:${endMinutes}`;
+            
+            const newNote = {
+                id: Date.now().toString(),
+                date: today,
+                timeStart,
+                timeEnd,
+                content: `AI 总结：${currentSummaryConfig.style}`,
+                tag: '总结',
+                isAI: true,
+                summaryContent: currentSummaryResult
+            };
+            
+            notes.unshift(newNote);
+            saveNotes();
+            renderNotes();
+            alert('总结已保存为新笔记');
+        }
+        
+        // 重新生成总结
+        function regenerateSummary() {
+            summaryContent.classList.add('hidden');
+            summaryLoading.classList.remove('hidden');
+            generateSummary();
+        }
+        
+        // 返回配置页面
+        function backToConfig() {
+            aiResultModal.classList.add('hidden');
+            openAISummaryModal();
+        }
+        
+        // 重试生成总结
+        function retrySummary() {
+            summaryError.classList.add('hidden');
+            summaryLoading.classList.remove('hidden');
+            generateSummary();
+        }
+    </script>
+</body>
+</html>
