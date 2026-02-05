@@ -34,7 +34,7 @@
                         'slide-up': 'slideUp 0.25s ease-out',
                         'bounce-in': 'bounceIn 0.3s ease-out',
                         'pulse': 'pulse 1.5s ease-in-out infinite',
-                        'drag-pulse': 'dragPulse 1s ease-in-out infinite',
+
                     },
                     keyframes: {
                         fadeIn: {
@@ -58,10 +58,7 @@
                             '70%': { transform: 'scale(1.02)', opacity: '1' },
                             '100%': { transform: 'scale(1)', opacity: '1' },
                         },
-                        dragPulse: {
-                            '0%, 100%': { transform: 'scale(1)', opacity: '1' },
-                            '50%': { transform: 'scale(1.03)', opacity: '0.8' },
-                        }
+
                     }
                 }
             }
@@ -75,12 +72,7 @@
             .note-card.selected {
                 @apply ring-2 ring-ai ring-opacity-50 bg-ai/5;
             }
-            .note-card.dragging {
-                @apply opacity-60 scale-105 shadow-xl z-50 animate-drag-pulse;
-            }
-            .note-card.drag-over {
-                @apply border-t-2 border-t-primary border-dashed;
-            }
+
             .btn {
                 @apply px-4 py-2 rounded-md font-medium transition-all duration-150 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-white active:scale-95;
             }
@@ -691,7 +683,7 @@
         </p>
     </div>
 
-    <!-- 拖放指示器（已禁用） -->
+
 
     <!-- JavaScript -->
     <script>
@@ -705,8 +697,6 @@
         let lastClickedNoteId = null; // 最后点击的笔记ID（用于区间选择）
         let currentSummaryConfig = {}; // 当前总结配置
         let currentSummaryResult = null; // 当前总结结果
-        
-        // 拖放相关变量（已禁用）
         
         // 新增加：选择模式状态
         let selectionMode = false; // 是否处于选择模式
@@ -757,7 +747,6 @@
         const summaryError = document.getElementById('summary-error');
         const errorMessage = document.getElementById('error-message');
         const selectionHint = document.getElementById('selection-hint');
-        const dragIndicator = document.getElementById('drag-indicator');
         
         // 初始化应用
         document.addEventListener('DOMContentLoaded', () => {
@@ -767,7 +756,6 @@
             renderNotes();
             bindEventListeners();
             bindAIEventListeners();
-            bindDragEvents();
             loadApiConfig();
             
             // 移除原有的选择提示显示
@@ -1002,8 +990,7 @@
             event.preventDefault();
             event.stopPropagation();
             
-            // 如果是拖放操作，不触发选择
-            if (draggedNote || isDragging) return;
+
             
             // 只有选择模式下才允许选择笔记
             if (!selectionMode) {
@@ -1034,235 +1021,23 @@
             });
         }
         
-        // ============ 拖放功能（已禁用） ============
+
         
-        function bindDragEvents() {
-            // 拖放功能已禁用，使用自动时间排序
-        }
+
         
-        function handleDragStart(e) {
-            if (!e.target.closest('.note-card')) return;
-            
-            // 选择模式下禁用拖放
-            if (selectionMode) return;
-            
-            draggedNote = e.target.closest('.note-card');
-            dragStartIndex = Array.from(notesContainer.children).indexOf(draggedNote);
-            
-            // 设置拖动效果
-            draggedNote.classList.add('dragging');
-            e.dataTransfer.effectAllowed = 'move';
-            e.dataTransfer.setData('text/plain', draggedNote.dataset.noteId);
-            
-            // 显示拖放指示器
-            dragIndicator.classList.remove('hidden');
-        }
+
         
-        function handleDragOver(e) {
-            e.preventDefault();
-            e.dataTransfer.dropEffect = 'move';
-            
-            // 查找当前悬停的笔记卡片
-            const noteCard = e.target.closest('.note-card');
-            if (noteCard && noteCard !== draggedNote) {
-                dragOverNote = noteCard;
-                noteCard.classList.add('drag-over');
-            }
-        }
+
         
-        function handleDragEnter(e) {
-            e.preventDefault();
-        }
+
         
-        function handleDragLeave(e) {
-            if (!e.target.closest('.note-card')) return;
-            
-            const noteCard = e.target.closest('.note-card');
-            if (noteCard && noteCard !== draggedNote) {
-                noteCard.classList.remove('drag-over');
-            }
-        }
+
         
-        function handleDrop(e) {
-            e.preventDefault();
-            
-            if (!draggedNote || !dragOverNote) return;
-            
-            const draggedId = draggedNote.dataset.noteId;
-            const targetId = dragOverNote.dataset.noteId;
-            
-            // 交换笔记位置
-            swapNotes(draggedId, targetId);
-            
-            // 清除样式
-            dragOverNote.classList.remove('drag-over');
-            draggedNote.classList.remove('dragging');
-            
-            // 隐藏指示器
-            dragIndicator.classList.add('hidden');
-            
-            // 重置变量
-            draggedNote = null;
-            dragOverNote = null;
-        }
+
         
-        function handleDragEnd() {
-            // 清除所有拖放相关样式
-            document.querySelectorAll('.note-card').forEach(card => {
-                card.classList.remove('dragging', 'drag-over');
-            });
-            
-            // 隐藏指示器
-            dragIndicator.classList.add('hidden');
-            
-            draggedNote = null;
-            dragOverNote = null;
-        }
+
         
-        // 移动端触摸事件处理
-        let touchStartY = 0;
-        let touchStartElement = null;
-        let isDragging = false;
-        let dragTimeout = null;
-        
-        function handleTouchStart(e) {
-            if (!e.target.closest('.note-card')) return;
-            
-            // 选择模式下禁用拖放
-            if (selectionMode) return;
-            
-            const noteCard = e.target.closest('.note-card');
-            touchStartElement = noteCard;
-            touchStartY = e.touches[0].clientY;
-            
-            // 设置长按开始拖放
-            dragTimeout = setTimeout(() => {
-                startTouchDrag(noteCard);
-            }, 300);
-        }
-        
-        function handleTouchMove(e) {
-            if (!isDragging || !touchStartElement) return;
-            
-            e.preventDefault();
-            const touchY = e.touches[0].clientY;
-            const deltaY = touchY - touchStartY;
-            
-            // 移动元素
-            touchStartElement.style.transform = `translateY(${deltaY}px)`;
-            
-            // 检测与其他笔记的碰撞
-            const noteCards = Array.from(document.querySelectorAll('.note-card'));
-            const currentIndex = noteCards.indexOf(touchStartElement);
-            
-            noteCards.forEach((card, index) => {
-                if (card === touchStartElement) return;
-                
-                const rect = card.getBoundingClientRect();
-                const draggedRect = touchStartElement.getBoundingClientRect();
-                
-                // 如果拖动的笔记与当前笔记重叠超过50%，则视为可交换位置
-                if (Math.abs(draggedRect.top - rect.top) < draggedRect.height * 0.5) {
-                    card.classList.add('drag-over');
-                    
-                    // 交换位置
-                    if (index < currentIndex) {
-                        notesContainer.insertBefore(touchStartElement, card);
-                    } else {
-                        notesContainer.insertBefore(touchStartElement, card.nextSibling);
-                    }
-                    
-                    // 更新笔记顺序
-                    updateNoteOrder();
-                } else {
-                    card.classList.remove('drag-over');
-                }
-            });
-        }
-        
-        function handleTouchEnd() {
-            clearTimeout(dragTimeout);
-            
-            if (isDragging && touchStartElement) {
-                // 结束拖放
-                touchStartElement.style.transform = '';
-                touchStartElement.classList.remove('dragging');
-                
-                // 清除拖放样式
-                document.querySelectorAll('.note-card').forEach(card => {
-                    card.classList.remove('drag-over');
-                });
-                
-                // 隐藏指示器
-                dragIndicator.classList.add('hidden');
-            }
-            
-            isDragging = false;
-            touchStartElement = null;
-        }
-        
-        function startTouchDrag(noteCard) {
-            isDragging = true;
-            draggedNote = noteCard;
-            dragStartIndex = Array.from(notesContainer.children).indexOf(noteCard);
-            
-            // 设置拖动效果
-            noteCard.classList.add('dragging');
-            
-            // 显示拖放指示器
-            dragIndicator.classList.remove('hidden');
-        }
-        
-        function swapNotes(draggedId, targetId) {
-            // 获取笔记索引
-            const draggedIndex = notes.findIndex(note => note.id === draggedId);
-            const targetIndex = notes.findIndex(note => note.id === targetId);
-            
-            if (draggedIndex === -1 || targetIndex === -1) return;
-            
-            // 交换笔记在数组中的位置
-            [notes[draggedIndex], notes[targetIndex]] = [notes[targetIndex], notes[draggedIndex]];
-            
-            // 保存并重新渲染
-            saveNotes();
-            
-            // 使用动画重新排序
-            animateNoteReorder(draggedId, targetId);
-        }
-        
-        function animateNoteReorder(draggedId, targetId) {
-            // 获取DOM元素
-            const draggedElement = document.querySelector(`[data-note-id="${draggedId}"]`);
-            const targetElement = document.querySelector(`[data-note-id="${targetId}"]`);
-            
-            if (!draggedElement || !targetElement) return;
-            
-            // 添加交换动画
-            draggedElement.classList.add('animate-fade-in');
-            targetElement.classList.add('animate-fade-in');
-            
-            // 短暂延迟后移除动画类
-            setTimeout(() => {
-                draggedElement.classList.remove('animate-fade-in');
-                targetElement.classList.remove('animate-fade-in');
-            }, 300);
-        }
-        
-        function updateNoteOrder() {
-            // 从DOM获取当前顺序
-            const noteElements = Array.from(notesContainer.querySelectorAll('.note-card'));
-            const orderedNoteIds = noteElements.map(el => el.dataset.noteId);
-            
-            // 重新排序notes数组
-            const newNotesOrder = [];
-            orderedNoteIds.forEach(id => {
-                const note = notes.find(n => n.id === id);
-                if (note) newNotesOrder.push(note);
-            });
-            
-            notes = newNotesOrder;
-            saveNotes();
-        }
+
         
         // ============ AI 总结功能 ============
         
@@ -1809,7 +1584,7 @@ ${note.details ? `详情：${note.details}\n` : ''}`;
             noteDiv.style.borderLeftColor = colorMap[color] || colorMap['note1'];
             
             noteDiv.dataset.noteId = note.id;
-            noteDiv.draggable = !selectionMode; // 选择模式下禁用拖放
+
             
             // 添加点击事件监听器（支持选择）
             noteDiv.addEventListener('click', (e) => {
@@ -2088,17 +1863,6 @@ ${note.details ? `详情：${note.details}\n` : ''}`;
                         toggleIcon.classList.remove('fa-chevron-down');
                         toggleIcon.classList.add('fa-chevron-right');
                         noteElement.classList.add('hidden');
-                    } else {
-                        // 如果是今天且笔记有详细信息，自动展开
-                        if (note.details && note.details.trim() !== '') {
-                            note.expanded = true;
-                            const detailsBtn = noteElement.querySelector('.details-btn i');
-                            const detailsSection = noteElement.querySelector('.note-details-expand');
-                            if (detailsBtn && detailsSection) {
-                                detailsBtn.classList.add('rotate-180');
-                                detailsSection.classList.remove('hidden');
-                            }
-                        }
                     }
                 });
             });
@@ -2188,15 +1952,6 @@ ${note.details ? `详情：${note.details}\n` : ''}`;
                         while (currentElement && !currentElement.classList.contains('date-group')) {
                             const noteId = currentElement.dataset.noteId;
                             const note = notes.find(n => n.id === noteId);
-                            if (note && note.details && note.details.trim() !== '') {
-                                note.expanded = true;
-                                const detailsBtn = currentElement.querySelector('.details-btn i');
-                                const detailsSection = currentElement.querySelector('.note-details-expand');
-                                if (detailsBtn && detailsSection) {
-                                    detailsBtn.classList.add('rotate-180');
-                                    detailsSection.classList.remove('hidden');
-                                }
-                            }
                             currentElement = currentElement.nextElementSibling;
                         }
                     }
