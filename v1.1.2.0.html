@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>闪录 | Real Fast Noter</title>
+    <title>快速笔记 | Real Fast Noter</title>
     <!-- Tailwind CSS v3 -->
     <script src="https://cdn.tailwindcss.com"></script>
     <!-- Font Awesome -->
@@ -175,7 +175,7 @@
         <div class="container mx-auto px-4 py-3 flex items-center justify-between">
             <div class="flex items-center space-x-2">
                 <i class="fa fa-sticky-note text-primary text-2xl"></i>
-                <h1 class="text-xl font-bold">闪录</h1>
+                <h1 class="text-xl font-bold">快速笔记</h1>
             </div>
             <div class="flex items-center space-x-4">
                 <!-- 选择/确认按钮 -->
@@ -218,8 +218,8 @@
             <div class="w-24 h-24 mb-4 text-gray-400">
                 <i class="fa fa-sticky-note-o text-6xl"></i>
             </div>
-            <h2 class="text-xl font-semibold mb-2">欢迎使用闪录</h2>
-            <p class="text-gray-500 mb-6 max-w-md">从这里开始您的记录之旅，创建第一个笔记，让记忆永不丢失</p>
+            <h2 class="text-xl font-semibold mb-2">还没有笔记</h2>
+            <p class="text-gray-500 mb-6 max-w-md">使用底部的快速输入框开始记录，支持快速添加时间间隔和笔记内容</p>
         </div>
     </main>
 
@@ -236,7 +236,7 @@
     <div class="sticky bottom-0 z-40 bg-white/90 backdrop-blur-md border-t border-gray-200 py-3 shadow-lg">
         <div class="container mx-auto px-4">
             <div class="bg-gray-100 rounded-lg p-3 shadow-sm">
-                <h3 class="text-sm font-medium text-gray-700 mb-2">添加笔记</h3>
+                <h3 class="text-sm font-medium text-gray-700 mb-2">快速添加笔记</h3>
                 <form id="quick-add-form" class="quick-input-row">
                     <!-- 日期（固定） -->
                     <div class="col-span-2 md:col-span-2 lg:col-span-2">
@@ -321,7 +321,14 @@
                                                     <input type="radio" name="summary-style" value="详细报告" class="mr-2">
                                                     <span class="text-sm">详细报告</span>
                                                 </label>
-
+                                                <label class="flex items-center p-2 border rounded cursor-pointer hover:bg-gray-50 transition-colors duration-150">
+                                                    <input type="radio" name="summary-style" value="要点列表" class="mr-2">
+                                                    <span class="text-sm">要点列表</span>
+                                                </label>
+                                                <label class="flex items-center p-2 border rounded cursor-pointer hover:bg-gray-50 transition-colors duration-150">
+                                                    <input type="radio" name="summary-style" value="时间线整理" class="mr-2">
+                                                    <span class="text-sm">时间线整理</span>
+                                                </label>
                                             </div>
                                         </div>
                                         
@@ -337,7 +344,10 @@
                                                     <input type="radio" name="output-format" value="Markdown格式" class="mr-2">
                                                     <span class="text-sm">Markdown</span>
                                                 </label>
-
+                                                <label class="flex items-center p-2 border rounded cursor-pointer hover:bg-gray-50 flex-1 transition-colors duration-150">
+                                                    <input type="radio" name="output-format" value="HTML格式" class="mr-2">
+                                                    <span class="text-sm">HTML</span>
+                                                </label>
                                             </div>
                                         </div>
                                         
@@ -443,7 +453,7 @@
                                     <i class="fa fa-magic text-4xl text-ai"></i>
                                 </div>
                                 <p class="text-gray-600">AI 正在思考中，请稍候...</p>
-                                <p class="text-sm text-gray-500 mt-2">这可能需要一点时间，请耐心等待</p>
+                                <p class="text-sm text-gray-500 mt-2">这可能需要几秒钟时间</p>
                             </div>
                             
                             <!-- 结果内容 -->
@@ -456,17 +466,17 @@
                                 
                                 <!-- 操作按钮 -->
                                 <div class="mt-6 flex flex-wrap gap-2">
+                                    <button id="copy-summary-btn" class="btn btn-secondary transition-all duration-150">
+                                        <i class="fa fa-copy mr-2"></i>复制到剪贴板
+                                    </button>
                                     <button id="save-as-note-btn" class="btn btn-primary transition-all duration-150">
-                                        <i class="fa fa-save mr-2"></i>保存
+                                        <i class="fa fa-save mr-2"></i>保存为新笔记
                                     </button>
                                     <button id="regenerate-summary-btn" class="btn btn-secondary transition-all duration-150">
                                         <i class="fa fa-refresh mr-2"></i>重新生成
                                     </button>
                                     <button id="adjust-config-btn" class="btn btn-secondary transition-all duration-150">
                                         <i class="fa fa-cog mr-2"></i>调整配置
-                                    </button>
-                                    <button id="close-summary-btn" class="btn btn-secondary transition-all duration-150">
-                                        <i class="fa fa-times mr-2"></i>关闭窗口
                                     </button>
                                 </div>
                             </div>
@@ -1053,20 +1063,12 @@
             document.getElementById('temperature').addEventListener('input', updateTemperatureValue);
             
             // 结果模态框按钮
-
+            document.getElementById('copy-summary-btn').addEventListener('click', copySummaryToClipboard);
             document.getElementById('save-as-note-btn').addEventListener('click', saveSummaryAsNote);
             document.getElementById('regenerate-summary-btn').addEventListener('click', regenerateSummary);
             document.getElementById('adjust-config-btn').addEventListener('click', backToConfig);
-            document.getElementById('close-summary-btn').addEventListener('click', closeAIResultModal);
             document.getElementById('retry-summary-btn').addEventListener('click', retrySummary);
             document.getElementById('back-to-config-btn').addEventListener('click', backToConfig);
-            
-            // ESC 键关闭结果模态框
-            document.addEventListener('keydown', (e) => {
-                if (e.key === 'Escape' && !aiResultModal.classList.contains('hidden')) {
-                    closeAIResultModal();
-                }
-            });
             
             // 关闭模态框
             aiSummaryModal.addEventListener('click', (e) => {
@@ -1432,6 +1434,8 @@ ${note.details ? `详情：${note.details}\n` : ''}`;
                     .replace(/#{1,6}\s+(.+)/g, '<strong>$1</strong>')
                     .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
                     .replace(/\*(.+?)\*/g, '<em>$1</em>');
+            } else if (currentSummaryConfig.requestData.summaryConfig.format === 'HTML格式') {
+                summaryText.innerHTML = summary;
             } else {
                 summaryText.textContent = summary;
             }
@@ -1472,7 +1476,15 @@ ${note.details ? `详情：${note.details}\n` : ''}`;
             errorMessage.textContent = userFriendlyMessage;
         }
         
-
+        // 复制总结到剪贴板
+        async function copySummaryToClipboard() {
+            try {
+                await navigator.clipboard.writeText(currentSummaryResult);
+                showSaveIndicator('已复制到剪贴板');
+            } catch (err) {
+                alert('复制失败，请手动选择文本复制');
+            }
+        }
         
         // 保存总结为新笔记
         function saveSummaryAsNote() {
