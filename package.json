@@ -1,0 +1,25 @@
+{
+  "name": "rfnoter",
+  "version": "2.0.0",
+  "description": "Real Fast Noter - A lightweight, fast note-taking app with AI summary support",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js"
+  },
+  "keywords": [
+    "notes",
+    "notetaking",
+    "ai-summary",
+    "deepseek",
+    "productivity"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "express": "^4.18.2"
+  },
+  "engines": {
+    "node": ">=14.0.0"
+  }
+}

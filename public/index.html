@@ -1,0 +1,517 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>快速笔记 | Real Fast Noter</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://cdn.jsdelivr.net/npm/font-awesome@4.7.0/css/font-awesome.min.css" rel="stylesheet">
+    <script src="tailwind.config.js"></script>
+    <style type="text/tailwindcss">
+        @layer utilities {
+            .note-card {
+                @apply relative p-4 rounded-lg shadow-md transition-all duration-200 hover:shadow-lg border-l-4 cursor-pointer touch-none;
+            }
+            .note-card.selected {
+                @apply ring-2 ring-ai ring-opacity-50 bg-ai/5;
+            }
+
+            .btn {
+                @apply px-4 py-2 rounded-md font-medium transition-all duration-150 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-white active:scale-95;
+            }
+            .btn-primary {
+                @apply bg-primary text-white hover:bg-primary/90 focus:ring-primary/50;
+            }
+            .btn-secondary {
+                @apply bg-gray-200 text-gray-800 hover:bg-gray-300 focus:ring-gray-400;
+            }
+            .btn-ai {
+                @apply bg-ai text-white hover:bg-ai/90 focus:ring-ai/50;
+            }
+            .input-field {
+                @apply w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-primary focus:border-primary transition-colors duration-150;
+            }
+            .textarea-field {
+                @apply w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-primary focus:border-primary resize-none transition-colors duration-150;
+            }
+            .quick-input-row {
+                @apply grid grid-cols-12 gap-2 items-center w-full;
+            }
+            .note-row-layout {
+                @apply grid grid-cols-12 gap-2 items-center w-full;
+            }
+            .expand-btn {
+                @apply text-gray-600 hover:text-primary transition-all duration-150 active:scale-95;
+            }
+            .tag {
+                @apply inline-block px-2 py-1 text-xs font-medium rounded-full bg-gray-100 text-gray-800 transition-all duration-150;
+            }
+            .ai-tag {
+                @apply inline-block px-2 py-1 text-xs font-medium rounded-full bg-ai/10 text-ai border border-ai/20 transition-all duration-150;
+            }
+            .selected-count-badge {
+                @apply fixed top-20 right-4 bg-ai text-white px-3 py-1 rounded-full text-sm font-medium shadow-lg z-40 animate-bounce-in;
+            }
+            .color-dot {
+                @apply w-6 h-6 rounded-full cursor-pointer border-2 border-white shadow-md transition-all duration-150 hover:scale-110 active:scale-95;
+            }
+            .date-header {
+                @apply transition-all duration-200 active:scale-[0.995];
+            }
+            .date-header.selected {
+                @apply ring-2 ring-ai ring-opacity-50 bg-ai/5;
+            }
+            .duration-badge {
+                @apply inline-block px-1.5 py-0.5 text-xs font-medium rounded-full bg-gray-100 text-gray-700 ml-1;
+            }
+        }
+
+        /* 手机版布局调整 */
+        @media (max-width: 640px) {
+            .quick-input-row {
+                grid-template-columns: repeat(1, minmax(0, 1fr));
+                gap: 0.75rem;
+            }
+            .note-row-layout {
+                grid-template-columns: repeat(1, minmax(0, 1fr));
+                gap: 0.5rem;
+            }
+            .note-card {
+                padding: 0.75rem;
+            }
+            .date-header h3 {
+                font-size: 0.875rem;
+                line-height: 1.25rem;
+            }
+            .quick-input-time-group {
+                flex-direction: column;
+            }
+            .quick-input-time-group span {
+                display: none;
+            }
+        }
+
+        /* 平板布局调整 */
+        @media (min-width: 641px) and (max-width: 768px) {
+            .quick-input-row {
+                grid-template-columns: repeat(6, minmax(0, 1fr));
+                gap: 0.5rem;
+            }
+            .note-row-layout {
+                grid-template-columns: repeat(6, minmax(0, 1fr));
+                gap: 0.5rem;
+            }
+        }
+
+        /* 修复底部输入区域在小屏幕下的重叠问题 */
+        @media (max-width: 480px) {
+            .quick-input-row {
+                grid-template-columns: repeat(1, minmax(0, 1fr));
+                gap: 0.5rem;
+            }
+            .quick-input-time-group {
+                flex-direction: column;
+            }
+            .quick-input-time-group span {
+                display: none;
+            }
+        }
+    </style>
+</head>
+<body class="bg-gray-50 text-gray-900 min-h-screen">
+    <header class="sticky top-0 z-50 bg-white/70 backdrop-blur-md border-b border-gray-200 shadow-sm">
+        <div class="container mx-auto px-4 py-3 flex items-center justify-between">
+            <div class="flex items-center space-x-2">
+                <i class="fa fa-sticky-note text-primary text-2xl"></i>
+                <h1 class="text-xl font-bold">快速笔记</h1>
+                <button id="help-btn" class="text-sm text-primary hover:text-primary/80 ml-4 transition-colors duration-150">帮助？</button>
+            </div>
+            <div class="flex items-center space-x-4">
+                <button id="selection-toggle-btn" class="btn btn-secondary text-sm transition-all duration-150">
+                    <i class="fa fa-check-square-o mr-2"></i>选择笔记
+                </button>
+                <div id="selection-info" class="hidden items-center space-x-4">
+                    <span id="selected-count" class="text-sm font-medium text-ai"></span>
+                    <button id="clear-selection-btn" class="text-sm text-gray-500 hover:text-gray-700 transition-colors duration-150">
+                        <i class="fa fa-times mr-1"></i>清空选择
+                    </button>
+                </div>
+            </div>
+        </div>
+        <div id="selection-mode-hint" class="hidden bg-blue-50 border-b border-blue-200 py-2 px-4 animate-slide-up">
+            <div class="container mx-auto flex items-center justify-between">
+                <p class="text-sm text-blue-800">
+                    <i class="fa fa-info-circle mr-2"></i>
+                    <span class="font-medium">选择模式已开启：</span>
+                    <span>左键勾选单个笔记，左键单击集合则勾选或取消勾选集合中的所有笔记喵</span>
+                </p>
+                <button id="close-selection-hint-btn" class="text-blue-600 hover:text-blue-800 transition-colors duration-150">
+                    <i class="fa fa-times"></i>
+                </button>
+            </div>
+        </div>
+    </header>
+
+    <main class="container mx-auto px-4 py-6">
+        <div id="notes-container" class="grid grid-cols-1 gap-3 mb-6"></div>
+        <div id="empty-state" class="hidden flex flex-col items-center justify-center py-16 text-center animate-fade-in">
+            <div class="w-24 h-24 mb-4 text-gray-400">
+                <i class="fa fa-sticky-note-o text-6xl"></i>
+            </div>
+            <h2 class="text-xl font-semibold mb-2">还没有笔记</h2>
+            <p class="text-gray-500 mb-6 max-w-md">使用底部的快速输入框开始记录，支持快速添加时间间隔和笔记内容喵</p>
+        </div>
+    </main>
+
+    <div id="ai-summary-float-btn" class="fixed bottom-24 right-6 z-30 hidden animate-slide-up">
+        <button class="btn btn-ai shadow-lg hover:shadow-xl transform transition-all duration-200">
+            <i class="fa fa-magic mr-2"></i>
+            <span>AI 总结</span>
+            <span id="selected-notes-count" class="ml-2 bg-white/20 px-2 py-0.5 rounded-full text-xs">0</span>
+        </button>
+    </div>
+
+    <div class="sticky bottom-0 z-40 bg-white/90 backdrop-blur-md border-t border-gray-200 py-3 shadow-lg">
+        <div class="container mx-auto px-4">
+            <div class="bg-gray-100 rounded-lg p-3 shadow-sm">
+                <h3 class="text-sm font-medium text-gray-700 mb-2">快速添加笔记</h3>
+                <form id="quick-add-form" class="quick-input-row">
+                    <div class="col-span-2 md:col-span-2 lg:col-span-2">
+                        <input type="text" id="quick-date" class="input-field text-center" readonly>
+                    </div>
+                    <div class="col-span-4 md:col-span-3 lg:col-span-3 flex gap-1 quick-input-time-group">
+                        <input type="time" id="quick-time-start" class="input-field" required>
+                        <span class="flex items-center justify-center px-1 text-gray-500">~</span>
+                        <input type="time" id="quick-time-end" class="input-field" required>
+                    </div>
+                    <div class="col-span-4 md:col-span-4 lg:col-span-4">
+                        <input type="text" id="quick-content" class="input-field" placeholder="输入笔记标题" required>
+                    </div>
+                    <div class="col-span-1 md:col-span-2 lg:col-span-2">
+                        <input type="text" id="quick-tag" class="input-field" placeholder="标签">
+                    </div>
+                    <div class="col-span-1">
+                        <button type="submit" class="btn btn-primary w-full transition-all duration-150 active:scale-95">
+                            <i class="fa fa-plus"></i>
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <div id="ai-summary-modal" class="fixed inset-0 z-50 hidden overflow-y-auto">
+        <div class="flex items-center justify-center min-h-screen px-4 pt-4 pb-20 text-center sm:block sm:p-0">
+            <div class="fixed inset-0 transition-opacity" aria-hidden="true">
+                <div class="absolute inset-0 bg-gray-500 opacity-75"></div>
+            </div>
+            <div class="inline-block overflow-hidden text-left align-bottom transition-all transform bg-white rounded-lg shadow-xl sm:my-8 sm:align-middle sm:max-w-4xl sm:w-full animate-slide-up">
+                <div class="px-4 pt-5 pb-4 bg-white sm:p-6 sm:pb-4">
+                    <div class="sm:flex sm:items-start">
+                        <div class="mt-3 text-center sm:mt-0 sm:ml-4 sm:text-left w-full">
+                            <div class="flex justify-between items-center mb-4">
+                                <h3 class="text-lg font-medium leading-6 text-gray-900">AI 笔记总结</h3>
+                                <span class="text-sm text-ai font-medium">
+                                    <i class="fa fa-magic mr-1"></i>
+                                    选中 <span id="modal-selected-count">0</span> 条笔记
+                                </span>
+                            </div>
+                            <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                                <div>
+                                    <h4 class="text-sm font-medium text-gray-700 mb-3">选中的笔记</h4>
+                                    <div id="selected-notes-preview" class="space-y-2 max-h-96 overflow-y-auto p-2 border border-gray-200 rounded-md"></div>
+                                    <p class="text-xs text-gray-500 mt-2">
+                                        <i class="fa fa-info-circle mr-1"></i>
+                                        点击笔记右侧的 <i class="fa fa-times text-red-500"></i> 可以取消选择
+                                    </p>
+                                </div>
+                                <div>
+                                    <h4 class="text-sm font-medium text-gray-700 mb-3">总结配置</h4>
+                                    <div class="space-y-4">
+                                        <div>
+                                            <label class="block text-sm font-medium text-gray-700 mb-1">总结风格</label>
+                                            <div class="grid grid-cols-2 gap-2">
+                                                <label class="flex items-center p-2 border rounded cursor-pointer hover:bg-gray-50 transition-colors duration-150">
+                                                    <input type="radio" name="summary-style" value="简洁摘要" class="mr-2" checked>
+                                                    <span class="text-sm">简洁摘要</span>
+                                                </label>
+                                                <label class="flex items-center p-2 border rounded cursor-pointer hover:bg-gray-50 transition-colors duration-150">
+                                                    <input type="radio" name="summary-style" value="详细报告" class="mr-2">
+                                                    <span class="text-sm">详细报告</span>
+                                                </label>
+                                                <label class="flex items-center p-2 border rounded cursor-pointer hover:bg-gray-50 transition-colors duration-150">
+                                                    <input type="radio" name="summary-style" value="记忆回溯" class="mr-2">
+                                                    <span class="text-sm">记忆回溯</span>
+                                                </label>
+                                            </div>
+                                        </div>
+                                        <div>
+                                            <label class="block text-sm font-medium text-gray-700 mb-1">输出格式</label>
+                                            <div class="flex space-x-2">
+                                                <label class="flex items-center p-2 border rounded cursor-pointer hover:bg-gray-50 flex-1 transition-colors duration-150">
+                                                    <input type="radio" name="output-format" value="纯文本" class="mr-2" checked>
+                                                    <span class="text-sm">纯文本</span>
+                                                </label>
+                                                <label class="flex items-center p-2 border rounded cursor-pointer hover:bg-gray-50 flex-1 transition-colors duration-150">
+                                                    <input type="radio" name="output-format" value="Markdown格式" class="mr-2">
+                                                    <span class="text-sm">Markdown</span>
+                                                </label>
+                                                <label class="flex items-center p-2 border rounded cursor-pointer hover:bg-gray-50 flex-1 transition-colors duration-150">
+                                                    <input type="radio" name="output-format" value="HTML格式" class="mr-2">
+                                                    <span class="text-sm">HTML</span>
+                                                </label>
+                                            </div>
+                                        </div>
+                                        <div>
+                                            <label for="custom-prompt" class="block text-sm font-medium text-gray-700 mb-1">
+                                                自定义提示词
+                                                <span class="text-gray-500 font-normal">（可选）</span>
+                                            </label>
+                                            <textarea id="custom-prompt" rows="3" class="textarea-field" placeholder="例如：请重点关注时间安排和任务优先级..."></textarea>
+                                        </div>
+                                        <div>
+                                            <button type="button" id="toggle-api-config" class="text-sm text-gray-600 hover:text-gray-800 mb-2 transition-colors duration-150">
+                                                <i class="fa fa-cog mr-1"></i>
+                                                高级设置 <i class="fa fa-chevron-down ml-1"></i>
+                                            </button>
+                                            <div id="api-config-section" class="hidden space-y-3 p-3 border border-gray-200 rounded-md">
+                                                <div>
+                                                    <label for="api-key" class="block text-xs font-medium text-gray-700 mb-1">
+                                                        DeepSeek API 密钥
+                                                        <span class="text-red-500">*</span>
+                                                    </label>
+                                                    <div class="flex space-x-2">
+                                                        <input type="password" id="api-key" class="input-field flex-1" placeholder="sk-...">
+                                                        <button type="button" id="toggle-api-key" class="btn btn-secondary text-xs transition-colors duration-150">
+                                                            <i class="fa fa-eye"></i>
+                                                        </button>
+                                                    </div>
+                                                    <p class="text-xs text-gray-500 mt-1">密钥仅保存在本地，不会发送到其他服务器</p>
+                                                </div>
+                                                <div class="grid grid-cols-2 gap-3">
+                                                    <div>
+                                                        <label for="model" class="block text-xs font-medium text-gray-700 mb-1">模型</label>
+                                                        <select id="model" class="input-field text-sm">
+                                                            <option value="deepseek-chat">deepseek-chat</option>
+                                                            <option value="deepseek-coder">deepseek-coder</option>
+                                                        </select>
+                                                    </div>
+                                                    <div>
+                                                        <label for="temperature" class="block text-xs font-medium text-gray-700 mb-1">
+                                                            温度: <span id="temp-value">0.7</span>
+                                                        </label>
+                                                        <input type="range" id="temperature" min="0" max="1" step="0.1" value="0.7" class="w-full">
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="px-4 py-3 bg-gray-50 sm:px-6 sm:flex sm:flex-row-reverse">
+                    <button type="button" id="generate-summary-btn" class="btn btn-ai transition-all duration-150">
+                        <i class="fa fa-magic mr-2"></i>生成总结
+                    </button>
+                    <button type="button" id="cancel-summary-btn" class="btn btn-secondary ml-3 transition-all duration-150">取消</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div id="ai-result-modal" class="fixed inset-0 z-50 hidden overflow-y-auto">
+        <div class="flex items-center justify-center min-h-screen px-4 pt-4 pb-20 text-center sm:block sm:p-0">
+            <div class="fixed inset-0 transition-opacity" aria-hidden="true">
+                <div class="absolute inset-0 bg-gray-500 opacity-75"></div>
+            </div>
+            <div class="inline-block overflow-hidden text-left align-bottom transition-all transform bg-white rounded-lg shadow-xl sm:my-8 sm:align-middle sm:max-w-4xl sm:w-full animate-slide-up">
+                <div class="px-4 pt-5 pb-4 bg-white sm:p-6 sm:pb-4">
+                    <div class="sm:flex sm:items-start">
+                        <div class="mt-3 text-center sm:mt-0 sm:ml-4 sm:text-left w-full">
+                            <div class="flex justify-between items-center mb-4">
+                                <div>
+                                    <h3 class="text-lg font-medium leading-6 text-gray-900">AI 总结结果</h3>
+                                    <p class="text-sm text-gray-500">基于 <span id="result-note-count">0</span> 条笔记生成</p>
+                                </div>
+                                <div class="flex items-center space-x-2">
+                                    <span id="summary-stats" class="text-xs text-gray-500"></span>
+                                    <span class="ai-tag"><i class="fa fa-magic mr-1"></i>AI 总结</span>
+                                </div>
+                            </div>
+                            <div id="summary-loading" class="hidden flex flex-col items-center justify-center py-8 animate-pulse">
+                                <div class="mb-4"><i class="fa fa-magic text-4xl text-ai"></i></div>
+                                <p class="text-gray-600">AI 正在思考中，请稍候...</p>
+                                <p class="text-sm text-gray-500 mt-2">这可能需要几秒钟时间</p>
+                            </div>
+                            <div id="summary-content" class="hidden animate-fade-in">
+                                <div class="prose max-w-none">
+                                    <div id="summary-text" class="p-4 border border-gray-200 rounded-md bg-gray-50 max-h-96 overflow-y-auto"></div>
+                                </div>
+                                <div class="mt-6 flex flex-wrap gap-2">
+                                    <button id="copy-summary-btn" class="btn btn-secondary transition-all duration-150"><i class="fa fa-copy mr-2"></i>复制到剪贴板</button>
+                                    <button id="save-as-note-btn" class="btn btn-primary transition-all duration-150"><i class="fa fa-save mr-2"></i>保存为新笔记</button>
+                                    <button id="regenerate-summary-btn" class="btn btn-secondary transition-all duration-150"><i class="fa fa-refresh mr-2"></i>重新生成</button>
+                                    <button id="adjust-config-btn" class="btn btn-secondary transition-all duration-150"><i class="fa fa-cog mr-2"></i>调整配置</button>
+                                </div>
+                            </div>
+                            <div id="summary-error" class="hidden flex flex-col items-center justify-center py-8 animate-fade-in">
+                                <div class="text-red-500 mb-4"><i class="fa fa-exclamation-triangle text-4xl"></i></div>
+                                <h4 class="text-lg font-medium text-gray-900 mb-2">生成失败</h4>
+                                <p id="error-message" class="text-gray-600 mb-4"></p>
+                                <div class="flex space-x-3">
+                                    <button id="retry-summary-btn" class="btn btn-primary transition-all duration-150"><i class="fa fa-refresh mr-2"></i>重试</button>
+                                    <button id="back-to-config-btn" class="btn btn-secondary transition-all duration-150"><i class="fa fa-arrow-left mr-2"></i>返回配置</button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div id="note-modal" class="fixed inset-0 z-50 hidden overflow-y-auto">
+        <div class="flex items-center justify-center min-h-screen px-4 pt-4 pb-20 text-center sm:block sm:p-0">
+            <div class="fixed inset-0 transition-opacity" aria-hidden="true">
+                <div class="absolute inset-0 bg-gray-500 opacity-75"></div>
+            </div>
+            <div class="inline-block overflow-hidden text-left align-bottom transition-all transform bg-white rounded-lg shadow-xl sm:my-8 sm:align-middle sm:max-w-lg sm:w-full animate-slide-up">
+                <div class="px-4 pt-5 pb-4 bg-white sm:p-6 sm:pb-4">
+                    <div class="sm:flex sm:items-start">
+                        <div class="mt-3 text-center sm:mt-0 sm:ml-4 sm:text-left w-full">
+                            <h3 id="modal-title" class="text-lg font-medium leading-6 text-gray-900 mb-4">编辑笔记</h3>
+                            <form id="note-form" class="space-y-4">
+                                <div>
+                                    <label for="note-date" class="block text-sm font-medium text-gray-700 mb-1">日期 <span class="text-red-500">*</span></label>
+                                    <input type="date" id="note-date" class="input-field" required>
+                                </div>
+                                <div class="grid grid-cols-2 gap-3">
+                                    <div>
+                                        <label for="note-time-start" class="block text-sm font-medium text-gray-700 mb-1">开始时间 <span class="text-red-500">*</span></label>
+                                        <input type="time" id="note-time-start" class="input-field" required>
+                                    </div>
+                                    <div>
+                                        <label for="note-time-end" class="block text-sm font-medium text-gray-700 mb-1">结束时间 <span class="text-red-500">*</span></label>
+                                        <input type="time" id="note-time-end" class="input-field" required>
+                                    </div>
+                                </div>
+                                <div>
+                                    <label for="note-content" class="block text-sm font-medium text-gray-700 mb-1">标题 <span class="text-red-500">*</span></label>
+                                    <input type="text" id="note-content" class="input-field" placeholder="笔记标题" required>
+                                </div>
+                                <div>
+                                    <label for="note-tag" class="block text-sm font-medium text-gray-700 mb-1">标签</label>
+                                    <input type="text" id="note-tag" class="input-field" placeholder="标签（最多20英文，中文计两格）">
+                                </div>
+                                <div>
+                                    <label class="block text-sm font-medium text-gray-700 mb-2">颜色标记</label>
+                                    <div class="flex space-x-2">
+                                        <div class="color-dot bg-note1 border-note1" data-color="note1" title="蓝色"></div>
+                                        <div class="color-dot bg-note2 border-note2" data-color="note2" title="绿色"></div>
+                                        <div class="color-dot bg-note3 border-note3" data-color="note3" title="橙色"></div>
+                                        <div class="color-dot bg-note4 border-note4" data-color="note4" title="红色"></div>
+                                        <div class="color-dot bg-note5 border-note5" data-color="note5" title="紫色"></div>
+                                        <div class="color-dot bg-gray-300 border-gray-300" data-color="" title="默认（无颜色）"></div>
+                                    </div>
+                                    <input type="hidden" id="note-color" value="">
+                                </div>
+                                <div>
+                                    <label for="note-details" class="block text-sm font-medium text-gray-700 mb-1">详细信息</label>
+                                    <textarea id="note-details" rows="4" class="textarea-field" placeholder="笔记详情..."></textarea>
+                                </div>
+                            </form>
+                        </div>
+                    </div>
+                </div>
+                <div class="px-4 py-3 bg-gray-50 sm:px-6 sm:flex sm:flex-row-reverse">
+                    <button type="button" id="save-note-btn" class="btn btn-primary transition-all duration-150">保存</button>
+                    <button type="button" id="cancel-note-btn" class="btn btn-secondary ml-3 transition-all duration-150">取消</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div id="help-modal" class="fixed inset-0 z-50 hidden overflow-y-auto">
+        <div class="flex items-center justify-center min-h-screen px-4 pt-4 pb-20 text-center sm:block sm:p-0">
+            <div class="fixed inset-0 transition-opacity" aria-hidden="true">
+                <div class="absolute inset-0 bg-gray-500 opacity-75"></div>
+            </div>
+            <div class="inline-block overflow-hidden text-left align-bottom transition-all transform bg-white rounded-lg shadow-xl sm:my-8 sm:align-middle sm:max-w-2xl sm:w-full animate-slide-up">
+                <div class="px-4 pt-5 pb-4 bg-white sm:p-6 sm:pb-4">
+                    <div class="flex items-center justify-between mb-4">
+                        <h3 class="text-lg font-medium leading-6 text-gray-900">闪录使用教程</h3>
+                        <button id="close-help-btn" class="text-gray-500 hover:text-gray-700 transition-colors duration-150"><i class="fa fa-times"></i></button>
+                    </div>
+                    <div id="help-content" class="text-sm text-gray-700 whitespace-pre-wrap break-words"></div>
+                </div>
+                <div class="px-4 py-3 bg-gray-50 sm:px-6 sm:flex sm:flex-row-reverse">
+                    <button type="button" id="close-help-btn2" class="btn btn-secondary transition-all duration-150">关闭</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div id="context-menu" class="hidden fixed z-50 w-48 bg-white/70 backdrop-blur-md rounded-md shadow-lg py-1 animate-slide-in">
+        <button class="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 transition-colors duration-150" id="edit-note-menu-btn"><i class="fa fa-pencil mr-2"></i> 编辑</button>
+        <button class="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 transition-colors duration-150" id="duplicate-note-menu-btn"><i class="fa fa-clone mr-2"></i> 复制</button>
+        <div class="relative group">
+            <button class="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 transition-colors duration-150 flex items-center justify-between" id="color-menu-btn">
+                <span><i class="fa fa-tag mr-2"></i> 颜色标记</span>
+                <i class="fa fa-chevron-right text-xs"></i>
+            </button>
+            <div id="color-submenu" class="hidden absolute left-full top-0 ml-1 w-32 bg-white/70 backdrop-blur-md rounded-md shadow-lg p-2">
+                <div class="grid grid-cols-3 gap-2">
+                    <div class="color-dot bg-note1 border-note1 mx-auto" data-color="note1" title="蓝色"></div>
+                    <div class="color-dot bg-note2 border-note2 mx-auto" data-color="note2" title="绿色"></div>
+                    <div class="color-dot bg-note3 border-note3 mx-auto" data-color="note3" title="橙色"></div>
+                    <div class="color-dot bg-note4 border-note4 mx-auto" data-color="note4" title="红色"></div>
+                    <div class="color-dot bg-note5 border-note5 mx-auto" data-color="note5" title="紫色"></div>
+                    <div class="color-dot bg-gray-300 border-gray-300 mx-auto" data-color="" title="默认"></div>
+                </div>
+            </div>
+        </div>
+        <div class="border-t border-gray-200"></div>
+        <button class="w-full text-left px-4 py-2 text-sm text-red-600 hover:bg-gray-100 transition-colors duration-150" id="delete-note-menu-btn"><i class="fa fa-trash mr-2"></i> 删除</button>
+    </div>
+
+    <div id="delete-modal" class="fixed inset-0 z-50 hidden overflow-y-auto">
+        <div class="flex items-center justify-center min-h-screen px-4 pt-4 pb-20 text-center sm:block sm:p-0">
+            <div class="fixed inset-0 transition-opacity" aria-hidden="true">
+                <div class="absolute inset-0 bg-gray-500 opacity-75"></div>
+            </div>
+            <div class="inline-block overflow-hidden text-left align-bottom transition-all transform bg-white rounded-lg shadow-xl sm:my-8 sm:align-middle sm:max-w-lg sm:w-full animate-slide-up">
+                <div class="px-4 pt-5 pb-4 bg-white sm:p-6 sm:pb-4">
+                    <div class="sm:flex sm:items-start">
+                        <div class="mx-auto flex-shrink-0 flex items-center justify-center h-12 w-12 rounded-full bg-red-100 sm:mx-0 sm:h-10 sm:w-10">
+                            <i class="fa fa-exclamation-triangle text-red-600"></i>
+                        </div>
+                        <div class="mt-3 text-center sm:mt-0 sm:ml-4 sm:text-left">
+                            <h3 class="text-lg font-medium leading-6 text-gray-900">删除笔记</h3>
+                            <div class="mt-2">
+                                <p class="text-sm text-gray-500">确定要删除这条笔记吗？此操作无法撤销。</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="px-4 py-3 bg-gray-50 sm:px-6 sm:flex sm:flex-row-reverse">
+                    <button type="button" id="confirm-delete-btn" class="btn bg-red-600 text-white hover:bg-red-700 transition-all duration-150">删除</button>
+                    <button type="button" id="cancel-delete-btn" class="btn btn-secondary ml-3 transition-all duration-150">取消</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div id="save-indicator" class="fixed bottom-20 right-4 bg-white/70 backdrop-blur-md px-4 py-2 rounded-md shadow-lg flex items-center space-x-2 transform translate-y-10 opacity-0 transition-all duration-300 z-40">
+        <i class="fa fa-check-circle text-green-500"></i>
+        <span>已保存</span>
+    </div>
+
+    <div id="selection-hint" class="fixed bottom-20 left-4 bg-white/70 backdrop-blur-md px-4 py-2 rounded-md shadow-lg text-sm hidden animate-slide-up z-40">
+        <p class="text-gray-700"><span class="font-medium">选择笔记：</span><span class="text-gray-600">Ctrl+点击选择单个，Shift+点击选择区间，拖动可重新排序</span></p>
+    </div>
+
+    <script type="module" src="js/app.js"></script>
+</body>
+</html>

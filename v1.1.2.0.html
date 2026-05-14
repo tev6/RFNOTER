@@ -176,6 +176,7 @@
             <div class="flex items-center space-x-2">
                 <i class="fa fa-sticky-note text-primary text-2xl"></i>
                 <h1 class="text-xl font-bold">快速笔记</h1>
+                <button id="help-btn" class="text-sm text-primary hover:text-primary/80 ml-4 transition-colors duration-150">帮助？</button>
             </div>
             <div class="flex items-center space-x-4">
                 <!-- 选择/确认按钮 -->
@@ -187,6 +188,7 @@
                     <button id="clear-selection-btn" class="text-sm text-gray-500 hover:text-gray-700 transition-colors duration-150">
                         <i class="fa fa-times mr-1"></i>清空选择
                     </button>
+                    
                 </div>
             </div>
         </div>
@@ -197,7 +199,7 @@
                 <p class="text-sm text-blue-800">
                     <i class="fa fa-info-circle mr-2"></i>
                     <span class="font-medium">选择模式已开启：</span>
-                    <span>左键勾选单个笔记，左键单击集合则勾选或取消勾选集合中的所有笔记</span>
+                    <span>左键勾选单个笔记，左键单击集合则勾选或取消勾选集合中的所有笔记喵</span>
                 </p>
                 <button id="close-selection-hint-btn" class="text-blue-600 hover:text-blue-800 transition-colors duration-150">
                     <i class="fa fa-times"></i>
@@ -219,7 +221,7 @@
                 <i class="fa fa-sticky-note-o text-6xl"></i>
             </div>
             <h2 class="text-xl font-semibold mb-2">还没有笔记</h2>
-            <p class="text-gray-500 mb-6 max-w-md">使用底部的快速输入框开始记录，支持快速添加时间间隔和笔记内容</p>
+            <p class="text-gray-500 mb-6 max-w-md">使用底部的快速输入框开始记录，支持快速添加时间间隔和笔记内容喵</p>
         </div>
     </main>
 
@@ -257,7 +259,7 @@
                     
                     <!-- 标签输入 -->
                     <div class="col-span-1 md:col-span-2 lg:col-span-2">
-                        <input type="text" id="quick-tag" class="input-field" placeholder="标签" maxlength="5">
+                        <input type="text" id="quick-tag" class="input-field" placeholder="标签">
                     </div>
                     
                     <!-- 提交按钮 -->
@@ -322,12 +324,8 @@
                                                     <span class="text-sm">详细报告</span>
                                                 </label>
                                                 <label class="flex items-center p-2 border rounded cursor-pointer hover:bg-gray-50 transition-colors duration-150">
-                                                    <input type="radio" name="summary-style" value="要点列表" class="mr-2">
-                                                    <span class="text-sm">要点列表</span>
-                                                </label>
-                                                <label class="flex items-center p-2 border rounded cursor-pointer hover:bg-gray-50 transition-colors duration-150">
-                                                    <input type="radio" name="summary-style" value="时间线整理" class="mr-2">
-                                                    <span class="text-sm">时间线整理</span>
+                                                    <input type="radio" name="summary-style" value="记忆回溯" class="mr-2">
+                                                    <span class="text-sm">记忆回溯</span>
                                                 </label>
                                             </div>
                                         </div>
@@ -557,7 +555,7 @@
                                     <label for="note-tag" class="block text-sm font-medium text-gray-700 mb-1">
                                         标签
                                     </label>
-                                    <input type="text" id="note-tag" class="input-field" placeholder="标签（最多5个字）" maxlength="5">
+                                    <input type="text" id="note-tag" class="input-field" placeholder="标签（最多20英文，中文计两格）">
                                 </div>
                                 
                                 <!-- 颜色标记 -->
@@ -596,6 +594,28 @@
                     <button type="button" id="cancel-note-btn" class="btn btn-secondary ml-3 transition-all duration-150">
                         取消
                     </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div id="help-modal" class="fixed inset-0 z-50 hidden overflow-y-auto">
+        <div class="flex items-center justify-center min-h-screen px-4 pt-4 pb-20 text-center sm:block sm:p-0">
+            <div class="fixed inset-0 transition-opacity" aria-hidden="true">
+                <div class="absolute inset-0 bg-gray-500 opacity-75"></div>
+            </div>
+            <div class="inline-block overflow-hidden text-left align-bottom transition-all transform bg-white rounded-lg shadow-xl sm:my-8 sm:align-middle sm:max-w-2xl sm:w-full animate-slide-up">
+                <div class="px-4 pt-5 pb-4 bg-white sm:p-6 sm:pb-4">
+                    <div class="flex items-center justify-between mb-4">
+                        <h3 class="text-lg font-medium leading-6 text-gray-900">闪录使用教程</h3>
+                        <button id="close-help-btn" class="text-gray-500 hover:text-gray-700 transition-colors duration-150">
+                            <i class="fa fa-times"></i>
+                        </button>
+                    </div>
+                    <div id="help-content" class="text-sm text-gray-700 whitespace-pre-wrap break-words"></div>
+                </div>
+                <div class="px-4 py-3 bg-gray-50 sm:px-6 sm:flex sm:flex-row-reverse">
+                    <button type="button" id="close-help-btn2" class="btn btn-secondary transition-all duration-150">关闭</button>
                 </div>
             </div>
         </div>
@@ -747,6 +767,53 @@
         const summaryError = document.getElementById('summary-error');
         const errorMessage = document.getElementById('error-message');
         const selectionHint = document.getElementById('selection-hint');
+        const helpBtn = document.getElementById('help-btn');
+        const helpModal = document.getElementById('help-modal');
+        const helpContent = document.getElementById('help-content');
+        const closeHelpBtn = document.getElementById('close-help-btn');
+        const closeHelpBtn2 = document.getElementById('close-help-btn2');
+
+        const TAG_LIMIT = 20;
+        function trimTagToLimit(text) {
+            let units = 0;
+            let out = '';
+            for (const ch of text) {
+                const add = /[\u4e00-\u9fff]/.test(ch) ? 2 : 1;
+                if (units + add > TAG_LIMIT) break;
+                units += add;
+                out += ch;
+            }
+            return out;
+        }
+
+        function markdownToHtml(md) {
+            return md
+                .replace(/\n/g, '<br>')
+                .replace(/#{1,6}\s+(.+)/g, '<strong>$1</strong>')
+                .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+                .replace(/\*(.+?)\*/g, '<em>$1</em>');
+        }
+
+        function openHelpModal() {
+            helpModal.classList.remove('hidden');
+            const mdUrl = new URL('flash-noter-tutorial.md', window.location.href).href;
+            fetch(mdUrl)
+                .then(r => r.text())
+                .then(md => {
+                    helpContent.innerHTML = markdownToHtml(md);
+                })
+                .catch(() => {
+                    if (window.location.protocol === 'file:') {
+                        helpContent.innerHTML = '当前以本地文件方式打开，浏览器会拦截读取外部 Markdown。请使用本地服务器方式打开该页面，或直接打开 <a href="flash-noter-tutorial.md" class="text-primary underline">flash-noter-tutorial.md</a> 查看原文。';
+                    } else {
+                        helpContent.textContent = '教程加载失败，请确认 flash-noter-tutorial.md 存在于同目录';
+                    }
+                });
+        }
+
+        function closeHelpModal() {
+            helpModal.classList.add('hidden');
+        }
         
         // 初始化应用
         document.addEventListener('DOMContentLoaded', () => {
@@ -904,6 +971,34 @@
                 dateHeader.classList.remove('selected');
             }
         }
+
+        function setDateGroupCollapsed(dateGroup, collapsed) {
+            if (!dateGroup) return;
+            const toggleIcon = dateGroup.querySelector('.toggle-icon');
+            if (collapsed) {
+                dateGroup.classList.add('collapsed');
+                if (toggleIcon) {
+                    toggleIcon.classList.remove('fa-chevron-down');
+                    toggleIcon.classList.add('fa-chevron-right');
+                }
+                let nextElement = dateGroup.nextElementSibling;
+                while (nextElement && !nextElement.classList.contains('date-group')) {
+                    nextElement.classList.add('hidden');
+                    nextElement = nextElement.nextElementSibling;
+                }
+            } else {
+                dateGroup.classList.remove('collapsed');
+                if (toggleIcon) {
+                    toggleIcon.classList.remove('fa-chevron-right');
+                    toggleIcon.classList.add('fa-chevron-down');
+                }
+                let nextElement = dateGroup.nextElementSibling;
+                while (nextElement && !nextElement.classList.contains('date-group')) {
+                    nextElement.classList.remove('hidden');
+                    nextElement = nextElement.nextElementSibling;
+                }
+            }
+        }
         
         // 处理日期分组点击
         function handleDateGroupClick(e) {
@@ -926,6 +1021,7 @@
                     selectedNotes.delete(id);
                     updateNoteSelectionUI(id, false);
                 });
+                setDateGroupCollapsed(group, true);
             } else {
                 // 如果未全部选中，则选中所有未选中的笔记
                 // 检查是否超过100条限制
@@ -939,6 +1035,7 @@
                     selectedNotes.add(id);
                     updateNoteSelectionUI(id, true);
                 });
+                setDateGroupCollapsed(group, false);
             }
             
             // 更新日期分组UI
@@ -1353,13 +1450,18 @@
 ${note.details ? `详情：${note.details}\n` : ''}`;
             });
             
+            const styleInstruction = style === '记忆回溯'
+                ? '采用记忆回溯口吻，细节充分、节奏舒缓、积极客观，但必须基于原始笔记，可以夸大'
+                : '根据所选风格输出';
+            
             prompt += `\n总结要求：
 1. 总结风格：${style}
-2. 输出格式必须遵循：${format}
-3. ${customPrompt || '请对以上笔记进行系统性的总结，突出关键信息和主题'}
-4. 保持原始信息的准确性
-5. 如有矛盾信息，请注明
-6. 用中文输出
+2. 风格细则：${styleInstruction}
+3. 输出格式必须遵循：${format}
+4. ${customPrompt || '请对以上笔记进行系统性的总结，突出关键信息和主题'}
+5. 保持原始信息的准确性
+6. 如有矛盾信息，请注明
+7. 用中文输出
 
 请直接给出总结内容，不需要额外的说明文字。`;
             
@@ -1977,7 +2079,9 @@ ${note.details ? `详情：${note.details}\n` : ''}`;
             const timeStart = document.getElementById('quick-time-start').value;
             const timeEnd = document.getElementById('quick-time-end').value;
             const content = document.getElementById('quick-content').value.trim();
-            const tag = document.getElementById('quick-tag').value.trim();
+            const quickTagInput = document.getElementById('quick-tag');
+            const tag = trimTagToLimit(quickTagInput.value.trim());
+            quickTagInput.value = tag;
             
             if (!timeStart || !timeEnd || !content) {
                 alert('请填写完整信息');
@@ -2033,7 +2137,7 @@ ${note.details ? `详情：${note.details}\n` : ''}`;
                 document.getElementById('note-time-start').value = note.timeStart;
                 document.getElementById('note-time-end').value = note.timeEnd;
                 document.getElementById('note-content').value = note.content;
-                document.getElementById('note-tag').value = note.tag || '';
+                document.getElementById('note-tag').value = trimTagToLimit(note.tag || '');
                 document.getElementById('note-details').value = note.details || '';
                 document.getElementById('note-color').value = note.color || 'note1';
                 
@@ -2106,7 +2210,9 @@ ${note.details ? `详情：${note.details}\n` : ''}`;
             const timeStart = document.getElementById('note-time-start').value;
             const timeEnd = document.getElementById('note-time-end').value;
             const content = document.getElementById('note-content').value.trim();
-            const tag = document.getElementById('note-tag').value.trim();
+            const noteTagInput = document.getElementById('note-tag');
+            const tag = trimTagToLimit(noteTagInput.value.trim());
+            noteTagInput.value = tag;
             const details = document.getElementById('note-details').value.trim();
             const color = document.getElementById('note-color').value;
             
@@ -2194,12 +2300,25 @@ ${note.details ? `详情：${note.details}\n` : ''}`;
                 if (noteIndex !== -1) {
                     const originalNote = notes[noteIndex];
                     
-                    // 计算新的开始和结束时间
-                    const [hours, minutes] = originalNote.timeEnd.split(':');
-                    const startTime = new Date();
-                    startTime.setHours(parseInt(hours), parseInt(minutes), 0, 0);
-                    
-                    const endTime = new Date(startTime.getTime() + 40 * 60000);
+                    const durationMinutes = calculateTimeDuration(originalNote.timeStart, originalNote.timeEnd);
+                    const now = new Date();
+                    const originalEndParts = originalNote.timeEnd.split(':').map(Number);
+                    const originalEnd = new Date();
+                    originalEnd.setHours(originalEndParts[0], originalEndParts[1], 0, 0);
+                    const gapMinutes = Math.floor((now.getTime() - originalEnd.getTime()) / 60000);
+                    const roundedNow = new Date(now);
+                    const roundedMinutes = Math.ceil(roundedNow.getMinutes() / 5) * 5;
+                    if (roundedMinutes === 60) {
+                        roundedNow.setHours(roundedNow.getHours() + 1, 0, 0, 0);
+                    } else {
+                        roundedNow.setMinutes(roundedMinutes, 0, 0);
+                    }
+                    const startParts = originalNote.timeStart.split(':').map(Number);
+                    const startTotal = startParts[0] * 60 + startParts[1];
+                    const endTotal = originalEndParts[0] * 60 + originalEndParts[1];
+                    const isCrossDay = endTotal < startTotal;
+                    const startTime = isCrossDay ? originalEnd : (gapMinutes > durationMinutes ? roundedNow : originalEnd);
+                    const endTime = new Date(startTime.getTime() + durationMinutes * 60000);
                     const newStartHour = String(startTime.getHours()).padStart(2, '0');
                     const newStartMinute = String(startTime.getMinutes()).padStart(2, '0');
                     const newEndHour = String(endTime.getHours()).padStart(2, '0');
@@ -2208,9 +2327,10 @@ ${note.details ? `详情：${note.details}\n` : ''}`;
                     const duplicatedNote = {
                         ...originalNote,
                         id: generateUUID(),
+                        date: getCurrentDateString(),
                         timeStart: `${newStartHour}:${newStartMinute}`,
                         timeEnd: `${newEndHour}:${newEndMinute}`,
-                        content: originalNote.content + ' (复制)',
+                        content: originalNote.content,
                         createdAt: Date.now(),
                         updatedAt: Date.now()
                     };
@@ -2276,10 +2396,22 @@ ${note.details ? `详情：${note.details}\n` : ''}`;
             
             // 快速添加表单
             quickAddForm.addEventListener('submit', quickAddNote);
+            const quickTagEl = document.getElementById('quick-tag');
+            if (quickTagEl) {
+                quickTagEl.addEventListener('input', () => {
+                    quickTagEl.value = trimTagToLimit(quickTagEl.value);
+                });
+            }
             
             // 编辑模态框
             document.getElementById('save-note-btn').addEventListener('click', saveNote);
             document.getElementById('cancel-note-btn').addEventListener('click', closeNoteModal);
+            const noteTagEl = document.getElementById('note-tag');
+            if (noteTagEl) {
+                noteTagEl.addEventListener('input', () => {
+                    noteTagEl.value = trimTagToLimit(noteTagEl.value);
+                });
+            }
             
             // 删除模态框
             document.getElementById('confirm-delete-btn').addEventListener('click', deleteNote);
@@ -2297,6 +2429,21 @@ ${note.details ? `详情：${note.details}\n` : ''}`;
                 closeContextMenu();
                 openDeleteModal(currentNoteId);
             });
+            
+            if (helpBtn) {
+                helpBtn.addEventListener('click', openHelpModal);
+            }
+            if (closeHelpBtn) {
+                closeHelpBtn.addEventListener('click', closeHelpModal);
+            }
+            if (closeHelpBtn2) {
+                closeHelpBtn2.addEventListener('click', closeHelpModal);
+            }
+            if (helpModal) {
+                helpModal.addEventListener('click', (e) => {
+                    if (e.target === helpModal) closeHelpModal();
+                });
+            }
             
             // 颜色选择
             document.querySelectorAll('.color-dot').forEach(dot => {
@@ -2349,6 +2496,7 @@ ${note.details ? `详情：${note.details}\n` : ''}`;
                         closeContextMenu();
                         closeAISummaryModal();
                         closeAIResultModal();
+                        closeHelpModal();
                     }
                 }
             });

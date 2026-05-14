@@ -1,0 +1,108 @@
+@layer utilities {
+    .note-card {
+        @apply relative p-4 rounded-lg shadow-md transition-all duration-200 hover:shadow-lg border-l-4 cursor-pointer touch-none;
+    }
+    .note-card.selected {
+        @apply ring-2 ring-ai ring-opacity-50 bg-ai/5;
+    }
+
+    .btn {
+        @apply px-4 py-2 rounded-md font-medium transition-all duration-150 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-white active:scale-95;
+    }
+    .btn-primary {
+        @apply bg-primary text-white hover:bg-primary/90 focus:ring-primary/50;
+    }
+    .btn-secondary {
+        @apply bg-gray-200 text-gray-800 hover:bg-gray-300 focus:ring-gray-400;
+    }
+    .btn-ai {
+        @apply bg-ai text-white hover:bg-ai/90 focus:ring-ai/50;
+    }
+    .input-field {
+        @apply w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-primary focus:border-primary transition-colors duration-150;
+    }
+    .textarea-field {
+        @apply w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-primary focus:border-primary resize-none transition-colors duration-150;
+    }
+    .quick-input-row {
+        @apply grid grid-cols-12 gap-2 items-center w-full;
+    }
+    .note-row-layout {
+        @apply grid grid-cols-12 gap-2 items-center w-full;
+    }
+    .expand-btn {
+        @apply text-gray-600 hover:text-primary transition-all duration-150 active:scale-95;
+    }
+    .tag {
+        @apply inline-block px-2 py-1 text-xs font-medium rounded-full bg-gray-100 text-gray-800 transition-all duration-150;
+    }
+    .ai-tag {
+        @apply inline-block px-2 py-1 text-xs font-medium rounded-full bg-ai/10 text-ai border border-ai/20 transition-all duration-150;
+    }
+    .selected-count-badge {
+        @apply fixed top-20 right-4 bg-ai text-white px-3 py-1 rounded-full text-sm font-medium shadow-lg z-40 animate-bounce-in;
+    }
+    .color-dot {
+        @apply w-6 h-6 rounded-full cursor-pointer border-2 border-white shadow-md transition-all duration-150 hover:scale-110 active:scale-95;
+    }
+    .date-header {
+        @apply transition-all duration-200 active:scale-[0.995];
+    }
+    .date-header.selected {
+        @apply ring-2 ring-ai ring-opacity-50 bg-ai/5;
+    }
+    .duration-badge {
+        @apply inline-block px-1.5 py-0.5 text-xs font-medium rounded-full bg-gray-100 text-gray-700 ml-1;
+    }
+}
+
+/* 手机版布局调整 */
+@media (max-width: 640px) {
+    .quick-input-row {
+        grid-template-columns: repeat(1, minmax(0, 1fr)) !important;
+        gap: 0.75rem !important;
+    }
+    .note-row-layout {
+        grid-template-columns: repeat(1, minmax(0, 1fr)) !important;
+        gap: 0.5rem !important;
+    }
+    .note-card {
+        padding: 0.75rem !important;
+    }
+    .date-header h3 {
+        font-size: 0.875rem !important;
+        line-height: 1.25rem !important;
+    }
+    .quick-input-time-group {
+        flex-direction: column !important;
+    }
+    .quick-input-time-group span {
+        display: none !important;
+    }
+}
+
+/* 平板布局调整 */
+@media (min-width: 641px) and (max-width: 768px) {
+    .quick-input-row {
+        grid-template-columns: repeat(6, minmax(0, 1fr)) !important;
+        gap: 0.5rem !important;
+    }
+    .note-row-layout {
+        grid-template-columns: repeat(6, minmax(0, 1fr)) !important;
+        gap: 0.5rem !important;
+    }
+}
+
+/* 修复底部输入区域在小屏幕下的重叠问题 */
+@media (max-width: 480px) {
+    .quick-input-row {
+        grid-template-columns: repeat(1, minmax(0, 1fr)) !important;
+        gap: 0.5rem !important;
+    }
+    .quick-input-time-group {
+        flex-direction: column !important;
+    }
+    .quick-input-time-group span {
+        display: none !important;
+    }
+}
