@@ -1,11 +1,13 @@
 {
   "name": "rfnoter",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "description": "Real Fast Noter - A lightweight, fast note-taking app with AI summary support",
+  "type": "module",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "dev": "node server.js"
+    "dev": "node server.js",
+    "test": "node --test"
   },
   "keywords": [
     "notes",
@@ -20,6 +22,9 @@
     "express": "^4.18.2"
   },
   "engines": {
-    "node": ">=14.0.0"
+    "node": ">=20.11.0"
+  },
+  "devDependencies": {
+    "jsdom": "^29.1.1"
   }
 }

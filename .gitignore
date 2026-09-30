@@ -2,3 +2,7 @@ node_modules/
 data/
 *.log
 .DS_Store
+
+# 原子写入的临时文件（正常情况不会残留）
+data/*.tmp
+*.tmp

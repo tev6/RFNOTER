@@ -124,15 +124,15 @@ interface SummaryConfig {
   style: string;          // '简洁摘要' | '详细报告' | '记忆回溯'
   format: string;         // '纯文本' | 'Markdown格式' | 'HTML格式'
   customPrompt: string;   // 用户自定义提示词（可选）
-  mergeMethod: string;    // 固定值 "time"
 }
 
 interface ApiConfig {
-  model: string;          // 'deepseek-chat' | 'deepseek-coder'
+  model: string;          // 'deepseek-flash' | 'deepseek-v4-pro'（可在界面里自动刷新）
   temperature: number;    // 0.0 ~ 1.0
-  maxTokens: number;      // 固定值 2000
 }
 ```
+
+> ⚠️ **v2.1.0 变更**：移除了从未使用的 `mergeMethod` 与 `apiConfig.maxTokens`（token 上限统一由 `api.js` 的 `MAX_TOKENS` 控制）；模型名更新为当前可用的 `deepseek-flash` / `deepseek-v4-pro`。
 
 ### 3.4 存储键名规范
 
@@ -140,6 +140,8 @@ interface ApiConfig {
 |------|------|------|------|
 | `userId` | localStorage | string | 用户唯一标识，格式：`UUID-时间戳` |
 | `notes_${userId}` | localStorage | string (JSON) | 笔记数组备份 |
+| `notes_${userId}_pending` | localStorage | `'1'` | 存在未同步改动时的标记（v2.1.0） |
+| `notes_${userId}_backup_*` | localStorage | string (JSON) | 覆盖本地副本前的自动备份，最多 3 份（v2.1.0） |
 | `notes_${userId}.json` | 服务端 `data/` | JSON 文件 | 主数据源 |
 
 > ⚠️ **v1.2.0 变更**：`deepseek_api_key` 已从 localStorage 中移除，改为内存存储。
@@ -447,9 +449,29 @@ const CONFIG = {
 |------|------|--------|------|
 | `setApiKey(key)` | `string` | 无 | 将 API 密钥存入内存（v1.2.0 变更） |
 | `getApiKey()` | 无 | `string \| null` | 从内存获取 API 密钥 |
-| `loadNotesFromServer()` | 无 | `Promise<Note[]>` | 从服务端加载笔记，失败回退 localStorage |
-| `saveNotesToServer(notes)` | `Note[]` | `Promise<boolean>` | 保存笔记到服务端，同时备份 localStorage |
-| `callDeepSeekAPI(apiKey, model, prompt, temperature)` | `string, string, string, number` | `Promise<string>` | 调用 DeepSeek API，带重试和超时 |
+| `loadNotes()` | 无 | `Promise<LoadResult>` | 按同步策略加载笔记，返回值带上数据来源与冲突标记（v2.1.0） |
+| `saveNotesToServer(notes)` | `Note[]` | `Promise<{ok, error?}>` | 先写本地副本，再同步服务端；失败会置 `_pending` 标记（v2.1.0） |
+| `saveNotesLocally(notes)` | `Note[]` | 无 | 只写本地副本，不发网络请求（v2.1.0） |
+| `backupLocalNotes()` | 无 | `string \| null` | 覆盖本地副本前备份，最多保留 3 份（v2.1.0） |
+| `hasPendingChanges()` | 无 | `boolean` | 是否存在未同步改动（v2.1.0） |
+| `fetchAvailableModels(apiKey)` | `string` | `Promise<string[]>` | 拉取账号可用模型列表（v2.1.0） |
+| `callDeepSeekAPI(apiKey, model, prompt, temperature)` | `string, string, string, number` | `Promise<string>` | 调用 DeepSeek API；只有网络错误/429/5xx 才重试（v2.1.0） |
+| `ApiError` | — | `Error` | 带 `status` / `retryable` 的结构化错误（v2.1.0） |
+
+`LoadResult` 结构：
+
+```typescript
+interface LoadResult {
+  notes: Note[];
+  source: 'server' | 'local';
+  offline: boolean;             // 服务端不可用，用的是本地副本
+  pending: boolean;             // 本地有未同步改动
+  needPush?: boolean;           // 需要把本地改动推回服务端
+  needImportConfirm?: boolean;  // 服务端为空而本地有数据，需用户确认是否导入
+  localCount?: number;
+  error?: string;
+}
+```
 
 ---
 
@@ -751,9 +773,15 @@ tailwind.config = {
 
 | 风险点 | 现状 | 建议 |
 |--------|------|------|
-| HTML 格式输出 | 仍直接 `innerHTML` 注入 AI 返回内容 | 对 HTML 格式输出添加 DOMPurify 过滤 |
 | 外部 CDN | 依赖第三方 CDN 可用性 | 考虑添加 fallback 或本地备份 |
-| `generateUUID` | 使用 `Math.random()`，非加密安全 | 使用 `crypto.randomUUID()`（需检查兼容性） |
+| 接口无鉴权 | `app.listen` 监听所有网卡，同网段可直接读写笔记接口 | 需要局域网使用时加一层访问令牌，或改为 `HOST=127.0.0.1` |
+
+> ✅ **v2.1.0 已修复**：
+> - HTML 格式输出改为 `sanitizeHtml()` 白名单净化（不再直接 `innerHTML`）。
+> - `generateUUID` 优先使用 `crypto.randomUUID()`。
+> - 服务端 `userId` 白名单校验，堵死 `..%2F` 目录穿越（原可读写任意 `*.json`）。
+> - 数据文件改为「临时文件 + rename」原子写入。
+> - `POST` 体积上限提升到 5MB（原 `express.json()` 默认 100KB 会静默失败）。
 
 ---
 
@@ -764,14 +792,14 @@ tailwind.config = {
 - 使用 ES6 Module (`type="module"`) 导入导出
 - `app.js` 依赖 `utils.js` 和 `api.js`
 - `api.js` 依赖 `utils.js`（`generateUUID`）
-- 服务端 `server.js` 使用 CommonJS（`require`）
+- 服务端 `server.js` 也使用 ESM（`package.json` 里 `"type": "module"`，Node ≥ 20.11）
 
 ### 11.2 数据持久化约束
 
-- 主数据源：服务端文件系统（`data/notes_${userId}.json`）
-- 备份：localStorage（`notes_${userId}`）
+- 主数据源：服务端文件系统（`data/notes_${userId}.json`），写入为原子操作
+- 备份：localStorage（`notes_${userId}`），另有 `_pending` 未同步标记与 `_backup_*` 自动备份
 - API 密钥：仅内存存储，页面刷新后丢失
-- 单条数据大小受浏览器 localStorage 限制（通常 5~10 MB）
+- 同步失败不会静默：界面顶部会显示「离线模式 / 有改动未同步」，保存提示可点击重试
 
 ### 11.3 性能注意事项
 
@@ -783,11 +811,21 @@ tailwind.config = {
 
 | 位置 | 问题 | 说明 |
 |------|------|------|
-| `buildPrompt` | 「可以夸大」疑似笔误 | 语义上应为「不可以夸大」 |
-| `showSummaryResult` | HTML 格式直接注入 | 仍存在 XSS 风险 |
-| `generateUUID` | 非加密安全 | 使用 `Math.random()` |
+| `showSummaryResult` | HTML 格式直接注入 | ✅ v2.1.0 已改为 `sanitizeHtml()` |
+| `generateUUID` | 非加密安全 | ✅ v2.1.0 已优先使用 `crypto.randomUUID()` |
 
-### 11.5 扩展预留接口
+### 11.5 v2.1.0 主要变更
+
+| 模块 | 变更 |
+|------|------|
+| `server.js` | 改为 ESM；抽出 `createApp()` / `startServer()` 便于测试；`userId` 白名单；原子写入；JSON 错误响应；端口回退修正（原 `PORT + 1` 会变成 `"30001"`） |
+| `api.js` | 同步层重写（离线副本 + `_pending` 标记 + 覆盖前备份）；`ApiError` 分级重试；新增 `fetchAvailableModels` |
+| `utils.js` | 日期按本地时区解析（原 `new Date('YYYY-MM-DD')` 在 UTC 以西会差一天）；新增 `sanitizeHtml` / `parseClockMinutes` / `minutesToClock` / `countWords`；`markdownToHtml` 不再把 `C# 语言` 当标题 |
+| `app.js` | 启动时对账（服务端为空而本地有数据必须用户确认）；保存状态如实提示并可点击重试；`buildPrompt` 移除「可以夸大」矛盾表述；修复 AI 结果页「重新生成 / 调整配置」双双关掉弹窗的死路；颜色「默认（无颜色）」不再被回落成 `note1`；复制笔记跨天时日期跟随开始时间 |
+| `index.html` | 移除 `.note-card` 上残留的 `touch-none`（手机上无法滚动列表）；更新模型选项 |
+| 测试 | 新增 `test/`（node:test + jsdom），33 个用例 |
+
+### 11.6 扩展预留接口
 
 | 预留点 | 说明 |
 |--------|------|
