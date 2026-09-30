@@ -1,3 +1,5 @@
+import { generateUUID } from './utils.js';
+
 const API_BASE = '/api';
 
 let userId = localStorage.getItem('userId');
@@ -6,7 +8,15 @@ if (!userId) {
     localStorage.setItem('userId', userId);
 }
 
-import { generateUUID } from './utils.js';
+let memoryApiKey = null;
+
+export function setApiKey(key) {
+    memoryApiKey = key;
+}
+
+export function getApiKey() {
+    return memoryApiKey;
+}
 
 export async function loadNotesFromServer() {
     try {
@@ -37,6 +47,15 @@ export async function saveNotesToServer(notes) {
     }
 }
 
+function createTimeoutSignal(timeoutMs) {
+    if (typeof AbortSignal.timeout === 'function') {
+        return AbortSignal.timeout(timeoutMs);
+    }
+    const controller = new AbortController();
+    setTimeout(() => controller.abort(new DOMException('The operation was aborted due to timeout', 'TimeoutError')), timeoutMs);
+    return controller.signal;
+}
+
 export async function callDeepSeekAPI(apiKey, model, prompt, temperature) {
     const maxRetries = 3;
     let lastError;
@@ -58,7 +77,7 @@ export async function callDeepSeekAPI(apiKey, model, prompt, temperature) {
                     max_tokens: 2000,
                     stream: false
                 }),
-                signal: AbortSignal.timeout(30000)
+                signal: createTimeoutSignal(30000)
             });
             if (!response.ok) {
                 const errorData = await response.json().catch(() => ({}));

@@ -3,6 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdn.tailwindcss.com; style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; font-src 'self' https://cdn.jsdelivr.net; connect-src 'self' https://api.deepseek.com; img-src 'self' data:;">
     <title>快速笔记 | Real Fast Noter</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://cdn.jsdelivr.net/npm/font-awesome@4.7.0/css/font-awesome.min.css" rel="stylesheet">
@@ -125,6 +126,13 @@
                 <i class="fa fa-sticky-note text-primary text-2xl"></i>
                 <h1 class="text-xl font-bold">快速笔记</h1>
                 <button id="help-btn" class="text-sm text-primary hover:text-primary/80 ml-4 transition-colors duration-150">帮助？</button>
+                <button id="export-btn" class="text-sm text-gray-600 hover:text-gray-800 ml-2 transition-colors duration-150" title="导出笔记">
+                    <i class="fa fa-download mr-1"></i>导出
+                </button>
+                <button id="import-btn" class="text-sm text-gray-600 hover:text-gray-800 transition-colors duration-150" title="导入笔记">
+                    <i class="fa fa-upload mr-1"></i>导入
+                </button>
+                <input type="file" id="import-file-input" accept=".json" class="hidden">
             </div>
             <div class="flex items-center space-x-4">
                 <button id="selection-toggle-btn" class="btn btn-secondary text-sm transition-all duration-150">

@@ -1,3 +1,13 @@
+export function escapeHTML(str) {
+    if (str === null || str === undefined) return '';
+    return String(str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;');
+}
+
 export function generateUUID() {
     return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
         const r = Math.random() * 16 | 0;
@@ -62,7 +72,8 @@ export function trimTagToLimit(text) {
 }
 
 export function markdownToHtml(md) {
-    return md
+    const escaped = escapeHTML(md);
+    return escaped
         .replace(/\n/g, '<br>')
         .replace(/#{1,6}\s+(.+)/g, '<strong>$1</strong>')
         .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')

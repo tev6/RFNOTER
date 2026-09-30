@@ -1,28 +1,37 @@
 import {
     generateUUID, getCurrentDateString, formatRelativeTime, formatDateForDisplay,
     calculateTimeDuration, formatDuration, trimTagToLimit, markdownToHtml,
-    isTodayDate, groupNotesByDate
+    isTodayDate, groupNotesByDate, escapeHTML
 } from './utils.js';
-import { loadNotesFromServer, saveNotesToServer, callDeepSeekAPI } from './api.js';
+import { loadNotesFromServer, saveNotesToServer, callDeepSeekAPI, setApiKey, getApiKey } from './api.js';
+
+const CONFIG = {
+    MAX_SELECTION: 100,
+    API_TIMEOUT: 30000,
+    DEFAULT_DURATION_MINUTES: 40,
+    TAG_LIMIT: 20,
+    MAX_CONTENT_LENGTH: 5000,
+    MAX_DETAILS_LENGTH: 10000,
+    ANIMATION_DURATION: 200,
+    COLOR_MAP: {
+        'note1': '#3b82f6',
+        'note2': '#10b981',
+        'note3': '#f59e0b',
+        'note4': '#ef4444',
+        'note5': '#8b5cf6',
+        'ai': '#8b5cf6',
+        '': '#3b82f6'
+    }
+};
 
 let notes = [];
 let currentNoteId = null;
 let lastEndTime = null;
 let selectedNotes = new Set();
-let lastClickedNoteId = null;
 let currentSummaryConfig = {};
 let currentSummaryResult = null;
 let selectionMode = false;
 let dateGroupNotesMap = new Map();
-
-const colorMap = {
-    'note1': '#3b82f6',
-    'note2': '#10b981',
-    'note3': '#f59e0b',
-    'note4': '#ef4444',
-    'note5': '#8b5cf6',
-    '': '#3b82f6'
-};
 
 const notesContainer = document.getElementById('notes-container');
 const emptyState = document.getElementById('empty-state');
@@ -53,12 +62,14 @@ const resultNoteCount = document.getElementById('result-note-count');
 const summaryStats = document.getElementById('summary-stats');
 const summaryError = document.getElementById('summary-error');
 const errorMessage = document.getElementById('error-message');
-const selectionHint = document.getElementById('selection-hint');
 const helpBtn = document.getElementById('help-btn');
 const helpModal = document.getElementById('help-modal');
 const helpContent = document.getElementById('help-content');
 const closeHelpBtn = document.getElementById('close-help-btn');
 const closeHelpBtn2 = document.getElementById('close-help-btn2');
+const exportBtn = document.getElementById('export-btn');
+const importBtn = document.getElementById('import-btn');
+const importFileInput = document.getElementById('import-file-input');
 
 document.addEventListener('DOMContentLoaded', async () => {
     initQuickInput();
@@ -66,7 +77,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     renderNotes();
     bindEventListeners();
     bindAIEventListeners();
-    loadApiConfig();
+    initImportExport();
 });
 
 function initQuickInput() {
@@ -85,7 +96,7 @@ function initQuickInput() {
         startTime.setSeconds(0);
         startTime.setMilliseconds(0);
     }
-    const endTime = new Date(startTime.getTime() + 40 * 60000);
+    const endTime = new Date(startTime.getTime() + CONFIG.DEFAULT_DURATION_MINUTES * 60000);
     const startHour = String(startTime.getHours()).padStart(2, '0');
     const startMinute = String(startTime.getMinutes()).padStart(2, '0');
     const endHour = String(endTime.getHours()).padStart(2, '0');
@@ -126,9 +137,20 @@ function renderNotes() {
     if (selectionMode) bindDateGroupSelectionEvents();
 }
 
+function updateEmptyState() {
+    if (notes.length === 0) {
+        emptyState.classList.remove('hidden');
+        notesContainer.classList.add('hidden');
+    } else {
+        emptyState.classList.add('hidden');
+        notesContainer.classList.remove('hidden');
+    }
+}
+
 function createDateGroupElement(date, noteCount, isToday) {
     const dateGroupDiv = document.createElement('div');
     dateGroupDiv.className = 'date-group mt-4 first:mt-0';
+    dateGroupDiv.dataset.date = date;
     const dateObj = new Date(date);
     const formattedDate = dateObj.toLocaleDateString('zh-CN', { year: 'numeric', month: 'long', day: 'numeric', weekday: 'long' });
     dateGroupDiv.innerHTML = `
@@ -175,7 +197,7 @@ function createNoteElement(note) {
     const noteDiv = document.createElement('div');
     noteDiv.className = `note-card animate-fade-in ${selectedNotes.has(note.id) ? 'selected' : ''}`;
     const color = note.color || 'note1';
-    noteDiv.style.borderLeftColor = colorMap[color] || colorMap['note1'];
+    noteDiv.style.borderLeftColor = CONFIG.COLOR_MAP[color] || CONFIG.COLOR_MAP['note1'];
     noteDiv.dataset.noteId = note.id;
     noteDiv.addEventListener('click', (e) => handleNoteSelection(e, note.id));
     const date = new Date(note.date);
@@ -185,9 +207,9 @@ function createNoteElement(note) {
     noteDiv.innerHTML = `
         <div class="note-row-layout mb-2 items-center">
             <div class="col-span-3 md:col-span-2 lg:col-span-2 text-center text-sm font-medium text-gray-500">${formattedDate}</div>
-            <div class="col-span-4 md:col-span-2 lg:col-span-2 text-center text-sm">${note.timeStart} ~ ${note.timeEnd}<span class="duration-badge">${durationText}</span></div>
-            <div class="col-span-3 md:col-span-4 lg:col-span-4 truncate text-sm font-medium">${note.content}</div>
-            <div class="col-span-1 md:col-span-2 lg:col-span-2 flex justify-center">${note.tag ? `<span class="tag">${note.tag}</span>` : ''}</div>
+            <div class="col-span-4 md:col-span-2 lg:col-span-2 text-center text-sm">${escapeHTML(note.timeStart)} ~ ${escapeHTML(note.timeEnd)}<span class="duration-badge">${durationText}</span></div>
+            <div class="col-span-3 md:col-span-4 lg:col-span-4 truncate text-sm font-medium">${escapeHTML(note.content)}</div>
+            <div class="col-span-1 md:col-span-2 lg:col-span-2 flex justify-center">${note.tag ? `<span class="tag">${escapeHTML(note.tag)}</span>` : ''}</div>
             <div class="col-span-1 flex justify-center">
                 <button class="text-xs text-primary hover:text-primary/80 edit-btn px-2 py-1 rounded hover:bg-primary/10 transition-all duration-150 active:scale-95">修改详情</button>
             </div>
@@ -198,7 +220,7 @@ function createNoteElement(note) {
         <div class="note-details-expand mt-3 pt-3 border-t border-gray-200 ${note.expanded ? '' : 'hidden'}">
             <div class="bg-gray-50 rounded-md p-3 mb-2">
                 <h4 class="text-sm font-medium text-gray-700 mb-2">详细信息</h4>
-                <p class="text-sm text-gray-600 whitespace-pre-wrap break-words">${note.details || '无详细信息'}</p>
+                <p class="text-sm text-gray-600 whitespace-pre-wrap break-words">${escapeHTML(note.details) || '无详细信息'}</p>
             </div>
             <div class="flex justify-between items-center text-xs text-gray-500">
                 <span>创建于 ${formatRelativeTime(note.createdAt)}</span>
@@ -350,6 +372,7 @@ function bindDateGroupSelectionEvents() {
         }
         dateGroupNotesMap.set(group, noteIds);
         const dateHeader = group.querySelector('.date-header');
+        dateHeader.removeEventListener('click', handleDateGroupClick);
         dateHeader.addEventListener('click', handleDateGroupClick);
         dateHeader.style.cursor = 'pointer';
         updateDateGroupSelectionUI(group, noteIds);
@@ -470,6 +493,264 @@ function exitSelectionMode() {
     updateSelectionUI();
 }
 
+function renderNoteElement(note) {
+    const existingGroup = findDateGroupElement(note.date);
+    let dateGroupElement;
+    
+    if (existingGroup) {
+        dateGroupElement = existingGroup;
+        const firstNote = dateGroupElement.nextElementSibling;
+        if (firstNote && firstNote.classList.contains('note-card')) {
+            const noteElement = createNoteElement(note);
+            notesContainer.insertBefore(noteElement, firstNote);
+        } else {
+            const noteElement = createNoteElement(note);
+            dateGroupElement.after(noteElement);
+        }
+    } else {
+        const notesInDate = notes.filter(n => n.date === note.date);
+        const isToday = isTodayDate(note.date);
+        dateGroupElement = createDateGroupElement(note.date, notesInDate.length, isToday);
+        
+        const allDates = [...new Set(notes.map(n => n.date))].sort((a, b) => new Date(b) - new Date(a));
+        const dateIndex = allDates.indexOf(note.date);
+        
+        if (dateIndex === 0) {
+            notesContainer.prepend(dateGroupElement);
+        } else {
+            let inserted = false;
+            for (let i = dateIndex - 1; i >= 0; i--) {
+                const prevDate = allDates[i];
+                const prevGroup = findDateGroupElement(prevDate);
+                if (prevGroup) {
+                    prevGroup.after(dateGroupElement);
+                    inserted = true;
+                    break;
+                }
+            }
+            if (!inserted) {
+                notesContainer.prepend(dateGroupElement);
+            }
+        }
+        
+        const noteElement = createNoteElement(note);
+        dateGroupElement.after(noteElement);
+        
+        if (!isToday) {
+            dateGroupElement.classList.add('collapsed');
+            const toggleIcon = dateGroupElement.querySelector('.toggle-icon');
+            if (toggleIcon) {
+                toggleIcon.classList.remove('fa-chevron-down');
+                toggleIcon.classList.add('fa-chevron-right');
+            }
+            dateGroupElement.nextElementSibling?.classList.add('hidden');
+        }
+    }
+    
+    if (selectionMode) {
+        bindDateGroupSelectionEvents();
+    }
+}
+
+function removeNoteElement(noteId) {
+    const noteElement = document.querySelector(`.note-card[data-note-id="${noteId}"]`);
+    if (!noteElement) return;
+    
+    const dateGroup = noteElement.previousElementSibling;
+    const wasLastNote = !noteElement.nextElementSibling || !noteElement.nextElementSibling.classList.contains('note-card');
+    
+    noteElement.remove();
+    
+    if (wasLastNote && dateGroup && dateGroup.classList.contains('date-group')) {
+        const date = dateGroup.dataset.date;
+        dateGroup.remove();
+    } else if (dateGroup && dateGroup.classList.contains('date-group')) {
+        const notesInGroup = notesContainer.querySelectorAll(`.note-card[data-note-id]`);
+        const groupNotes = [];
+        let current = dateGroup.nextElementSibling;
+        while (current && !current.classList.contains('date-group')) {
+            if (current.classList.contains('note-card')) {
+                groupNotes.push(current);
+            }
+            current = current.nextElementSibling;
+        }
+        
+        const countSpan = dateGroup.querySelector('.bg-primary');
+        if (countSpan) {
+            countSpan.textContent = `${groupNotes.length} 条笔记`;
+        }
+    }
+}
+
+function findDateGroupElement(date) {
+    const groups = notesContainer.querySelectorAll('.date-group');
+    for (const group of groups) {
+        if (group.dataset.date === date) {
+            return group;
+        }
+    }
+    return null;
+}
+
+function exportNotes() {
+    if (notes.length === 0) {
+        alert('没有笔记可导出');
+        return;
+    }
+    
+    const exportData = {
+        version: '1.2.0',
+        exportTime: new Date().toISOString(),
+        noteCount: notes.length,
+        notes: notes
+    };
+    
+    const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    const dateStr = new Date().toISOString().slice(0, 10);
+    a.href = url;
+    a.download = `rfnoter-backup-${dateStr}.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    
+    showSaveIndicator('已导出笔记');
+}
+
+function validateNoteImport(data) {
+    const errors = [];
+    
+    if (typeof data !== 'object' || data === null) {
+        errors.push('数据格式无效');
+        return { valid: false, errors };
+    }
+    
+    if (!Array.isArray(data.notes)) {
+        errors.push('缺少 notes 数组');
+        return { valid: false, errors };
+    }
+    
+    const validNotes = [];
+    for (let i = 0; i < data.notes.length; i++) {
+        const note = data.notes[i];
+        if (!note.id || typeof note.id !== 'string') {
+            errors.push(`第 ${i + 1} 条笔记：缺少有效ID`);
+            continue;
+        }
+        if (!note.date || typeof note.date !== 'string') {
+            errors.push(`第 ${i + 1} 条笔记：缺少有效日期`);
+            continue;
+        }
+        if (!note.timeStart || typeof note.timeStart !== 'string') {
+            errors.push(`第 ${i + 1} 条笔记：缺少开始时间`);
+            continue;
+        }
+        if (!note.timeEnd || typeof note.timeEnd !== 'string') {
+            errors.push(`第 ${i + 1} 条笔记：缺少结束时间`);
+            continue;
+        }
+        if (!note.content || typeof note.content !== 'string') {
+            errors.push(`第 ${i + 1} 条笔记：缺少有效内容`);
+            continue;
+        }
+        
+        validNotes.push({
+            id: note.id,
+            date: note.date,
+            timeStart: note.timeStart,
+            timeEnd: note.timeEnd,
+            content: String(note.content).slice(0, CONFIG.MAX_CONTENT_LENGTH),
+            tag: note.tag ? String(note.tag).slice(0, CONFIG.TAG_LIMIT) : '',
+            color: note.color || 'note1',
+            details: note.details ? String(note.details).slice(0, CONFIG.MAX_DETAILS_LENGTH) : '',
+            expanded: Boolean(note.expanded),
+            createdAt: typeof note.createdAt === 'number' ? note.createdAt : Date.now(),
+            updatedAt: typeof note.updatedAt === 'number' ? note.updatedAt : Date.now()
+        });
+    }
+    
+    return { valid: validNotes.length > 0, errors, notes: validNotes };
+}
+
+function importNotes() {
+    importFileInput.click();
+}
+
+async function handleFileImport(event) {
+    const file = event.target.files[0];
+    if (!file) return;
+    
+    if (!file.name.endsWith('.json')) {
+        alert('请选择 JSON 文件');
+        return;
+    }
+    
+    try {
+        const text = await file.text();
+        let importData;
+        
+        try {
+            importData = JSON.parse(text);
+        } catch (e) {
+            alert('文件格式错误，无法解析 JSON');
+            return;
+        }
+        
+        const validation = validateNoteImport(importData);
+        
+        if (!validation.valid) {
+            alert('导入失败：\n' + validation.errors.join('\n'));
+            return;
+        }
+        
+        const existingIds = new Set(notes.map(n => n.id));
+        const newNotes = validation.notes.filter(n => !existingIds.has(n.id));
+        
+        if (newNotes.length === 0) {
+            alert('导入的笔记已全部存在，没有新的笔记需要导入');
+            return;
+        }
+        
+        const action = confirm(
+            `发现 ${newNotes.length} 条新笔记\n` +
+            `是否合并到现有笔记？\n\n` +
+            `点击"确定"：合并（保留现有笔记）\n` +
+            `点击"取消"：替换（用导入数据覆盖现有笔记）`
+        );
+        
+        if (action) {
+            notes = [...newNotes, ...notes];
+        } else {
+            notes = validation.notes;
+        }
+        
+        await saveNotes();
+        renderNotes();
+        
+        showSaveIndicator(`已导入 ${newNotes.length} 条笔记`);
+        
+    } catch (error) {
+        console.error('Import error:', error);
+        alert('导入失败：' + error.message);
+    }
+    
+    event.target.value = '';
+}
+
+function initImportExport() {
+    if (exportBtn) {
+        exportBtn.addEventListener('click', exportNotes);
+    }
+    if (importBtn) {
+        importBtn.addEventListener('click', importNotes);
+    }
+    if (importFileInput) {
+        importFileInput.addEventListener('change', handleFileImport);
+    }
+}
+
 function quickAddNote(e) {
     e.preventDefault();
     if (selectionMode) {
@@ -502,7 +783,8 @@ function quickAddNote(e) {
     };
     notes.unshift(newNote);
     saveNotes();
-    renderNotes();
+    renderNoteElement(newNote);
+    updateEmptyState();
     const [hours, minutes] = timeEnd.split(':');
     const today = new Date();
     const endTime = new Date(today);
@@ -561,12 +843,7 @@ function saveNote() {
     if (currentNoteId) {
         const noteIndex = notes.findIndex(note => note.id === currentNoteId);
         if (noteIndex !== -1) {
-            const originalDate = notes[noteIndex].date;
             notes[noteIndex] = { ...notes[noteIndex], ...noteData };
-            if (originalDate !== date) {
-                closeNoteModal();
-                setTimeout(() => renderNotes(), 100);
-            }
         }
     }
     saveNotes();
@@ -588,30 +865,38 @@ function closeDeleteModal() {
 }
 
 function deleteNote() {
-    if (currentNoteId) {
-        const noteIndex = notes.findIndex(note => note.id === currentNoteId);
-        if (noteIndex !== -1) {
-            if (selectedNotes.has(currentNoteId)) {
-                selectedNotes.delete(currentNoteId);
-                updateSelectionUI();
-            }
-            const noteElement = document.querySelector(`[data-note-id="${currentNoteId}"]`);
-            if (noteElement) {
-                noteElement.classList.add('animate-fade-out');
-                setTimeout(() => {
-                    notes.splice(noteIndex, 1);
-                    saveNotes();
-                    renderNotes();
-                }, 200);
-            } else {
-                notes.splice(noteIndex, 1);
-                saveNotes();
-                renderNotes();
-            }
-        }
+    if (!currentNoteId) {
         closeDeleteModal();
         closeContextMenu();
+        return;
     }
+    const noteIdToDelete = currentNoteId;
+    if (selectedNotes.has(noteIdToDelete)) {
+        selectedNotes.delete(noteIdToDelete);
+        updateSelectionUI();
+    }
+    const noteElement = document.querySelector(`[data-note-id="${noteIdToDelete}"]`);
+    if (noteElement) {
+        noteElement.classList.add('animate-fade-out');
+        setTimeout(() => {
+            const noteIndex = notes.findIndex(note => note.id === noteIdToDelete);
+            if (noteIndex !== -1) {
+                notes.splice(noteIndex, 1);
+                saveNotes();
+                removeNoteElement(noteIdToDelete);
+                updateEmptyState();
+            }
+        }, CONFIG.ANIMATION_DURATION);
+    } else {
+        const noteIndex = notes.findIndex(note => note.id === noteIdToDelete);
+        if (noteIndex !== -1) {
+            notes.splice(noteIndex, 1);
+            saveNotes();
+            updateEmptyState();
+        }
+    }
+    closeDeleteModal();
+    closeContextMenu();
 }
 
 function duplicateNote() {
@@ -679,9 +964,6 @@ function openContextMenu(event, noteId) {
     contextMenu.style.top = `${event.clientY}px`;
     contextMenu.style.left = `${event.clientX}px`;
     contextMenu.classList.remove('hidden');
-    const colorMenuBtn = document.getElementById('color-menu-btn');
-    colorMenuBtn.addEventListener('mouseenter', showColorSubmenu);
-    colorMenuBtn.addEventListener('click', showColorSubmenu);
 }
 
 function closeContextMenu() {
@@ -736,6 +1018,11 @@ function bindEventListeners() {
     document.getElementById('edit-note-menu-btn').addEventListener('click', () => { closeContextMenu(); openEditModal(currentNoteId); });
     document.getElementById('duplicate-note-menu-btn').addEventListener('click', duplicateNote);
     document.getElementById('delete-note-menu-btn').addEventListener('click', () => { closeContextMenu(); openDeleteModal(currentNoteId); });
+    const colorMenuBtn = document.getElementById('color-menu-btn');
+    if (colorMenuBtn) {
+        colorMenuBtn.addEventListener('mouseenter', showColorSubmenu);
+        colorMenuBtn.addEventListener('click', showColorSubmenu);
+    }
     if (helpBtn) helpBtn.addEventListener('click', openHelpModal);
     if (closeHelpBtn) closeHelpBtn.addEventListener('click', closeHelpModal);
     if (closeHelpBtn2) closeHelpBtn2.addEventListener('click', closeHelpModal);
@@ -790,11 +1077,6 @@ function bindAIEventListeners() {
     });
 }
 
-function loadApiConfig() {
-    const savedApiKey = localStorage.getItem('deepseek_api_key');
-    if (savedApiKey) document.getElementById('api-key').value = savedApiKey;
-}
-
 function toggleApiConfig() {
     const section = document.getElementById('api-config-section');
     const icon = this.querySelector('i.fa-chevron-down');
@@ -842,12 +1124,12 @@ function openAISummaryModal() {
             <div class="flex-1 min-w-0">
                 <div class="flex items-center space-x-2 mb-1">
                     <span class="text-xs text-gray-500">${formatDateForDisplay(note.date)}</span>
-                    <span class="text-xs text-gray-700">${note.timeStart} ~ ${note.timeEnd}</span>
-                    ${note.tag ? `<span class="tag">${note.tag}</span>` : ''}
+                    <span class="text-xs text-gray-700">${escapeHTML(note.timeStart)} ~ ${escapeHTML(note.timeEnd)}</span>
+                    ${note.tag ? `<span class="tag">${escapeHTML(note.tag)}</span>` : ''}
                 </div>
-                <p class="text-sm text-gray-800 truncate">${note.content}</p>
+                <p class="text-sm text-gray-800 truncate">${escapeHTML(note.content)}</p>
             </div>
-            <button class="ml-2 text-gray-400 hover:text-red-500 transition-colors duration-150 active:scale-95" data-note-id="${note.id}"><i class="fa fa-times"></i></button>
+            <button class="ml-2 text-gray-400 hover:text-red-500 transition-colors duration-150 active:scale-95" data-note-id="${escapeHTML(note.id)}"><i class="fa fa-times"></i></button>
         `;
         const removeBtn = noteElement.querySelector('button');
         removeBtn.addEventListener('click', (e) => {
@@ -874,7 +1156,7 @@ async function generateSummary() {
         document.getElementById('api-key').focus();
         return;
     }
-    localStorage.setItem('deepseek_api_key', apiKey);
+    setApiKey(apiKey);
     const style = document.querySelector('input[name="summary-style"]:checked').value;
     const format = document.querySelector('input[name="output-format"]:checked').value;
     const customPrompt = document.getElementById('custom-prompt').value.trim();
@@ -1007,7 +1289,11 @@ function retrySummary() {
 
 async function generateSummaryFromConfig() {
     try {
-        const apiKey = localStorage.getItem('deepseek_api_key');
+        const apiKey = getApiKey();
+        if (!apiKey) {
+            showSummaryError(new Error('API密钥已失效，请重新输入'));
+            return;
+        }
         const { requestData } = currentSummaryConfig;
         const { model, temperature } = requestData.apiConfig;
         const prompt = buildPrompt(requestData);
