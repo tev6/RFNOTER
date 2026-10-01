@@ -33,7 +33,7 @@ nsis:
   allowToChangeInstallationDirectory: true
   createDesktopShortcut: true
   createStartMenuShortcut: true
-  shortcutName: RFNOTER 闪录
+  shortcutName: 闪录
   installerIcon: build/icon.ico
   uninstallerIcon: build/icon.ico
   # 关键：卸载时绝不能删用户的笔记（%APPDATA%\rfnoter）

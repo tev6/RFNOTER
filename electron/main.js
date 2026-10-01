@@ -1,6 +1,6 @@
 import {
     app, BrowserWindow, Tray, Menu, globalShortcut, ipcMain,
-    nativeImage, shell, protocol
+    nativeImage, shell, protocol, screen
 } from 'electron';
 import path from 'node:path';
 import fs from 'node:fs';
@@ -101,13 +101,57 @@ function registerAppProtocol() {
     });
 }
 
+/** 窗口尺寸/位置记忆，避免每次启动都要重新摆一遍。 */
+function windowStateFile() {
+    return path.join(app.getPath('userData'), 'window-state.json');
+}
+
+function loadWindowState() {
+    try {
+        const saved = JSON.parse(fs.readFileSync(windowStateFile(), 'utf8'));
+        if (!Number.isFinite(saved.width) || !Number.isFinite(saved.height)) return null;
+        return saved;
+    } catch {
+        return null;
+    }
+}
+
+function saveWindowState() {
+    if (!mainWindow || mainWindow.isDestroyed() || mainWindow.isMinimized()) return;
+    try {
+        // 最大化时记普通尺寸，下次取消最大化能回到合适的大小
+        const bounds = mainWindow.getNormalBounds();
+        fs.writeFileSync(
+            windowStateFile(),
+            JSON.stringify({ ...bounds, maximized: mainWindow.isMaximized() }),
+            'utf8'
+        );
+    } catch { /* 记不住就算了，不该因为写状态文件失败而影响使用 */ }
+}
+
 function createWindow() {
+    // 默认尺寸必须能放进当前屏幕工作区：之前固定 1180x840，在 1280x800 这类屏幕上
+    // 会超出可视范围（底部被任务栏盖住）。
+    const { workArea } = screen.getPrimaryDisplay();
+    const margin = 24;
+    const saved = IS_SELFTEST ? null : loadWindowState();
+    let width = Math.min(saved?.width ?? 1180, workArea.width - margin);
+    let height = Math.min(saved?.height ?? 840, workArea.height - margin);
+    width = Math.max(width, 720);
+    height = Math.max(height, 520);
+    // 位置也要夹回工作区内，否则换显示器/改分辨率后窗口会落在屏幕外
+    let x = Number.isFinite(saved?.x) ? saved.x : undefined;
+    let y = Number.isFinite(saved?.y) ? saved.y : undefined;
+    if (x !== undefined && (x < workArea.x - 50 || x > workArea.x + workArea.width - 100)) x = undefined;
+    if (y !== undefined && (y < workArea.y - 50 || y > workArea.y + workArea.height - 100)) y = undefined;
+
     mainWindow = new BrowserWindow({
-        width: 1180,
-        height: 840,
+        width,
+        height,
+        ...(x !== undefined && y !== undefined ? { x, y } : {}),
         minWidth: 720,
         minHeight: 520,
-        title: 'RFNOTER 闪录',
+        title: '闪录',
         icon: iconImage('icon.png'),
         backgroundColor: '#f9fafb',
         autoHideMenuBar: true,
@@ -119,15 +163,25 @@ function createWindow() {
         }
     });
 
+    if (saved?.maximized) mainWindow.maximize();
+
     mainWindow.loadURL(`${APP_ORIGIN}/index.html`);
 
     // 关闭 = 收进托盘（否则全局热键就没意义了）
     mainWindow.on('close', (event) => {
+        saveWindowState();
         if (!quitting) {
             event.preventDefault();
             mainWindow.hide();
         }
     });
+    let stateTimer = null;
+    const scheduleSave = () => {
+        clearTimeout(stateTimer);
+        stateTimer = setTimeout(saveWindowState, 400);
+    };
+    mainWindow.on('resize', scheduleSave);
+    mainWindow.on('move', scheduleSave);
 
     if (!IS_SELFTEST) {
         mainWindow.once('ready-to-show', () => showWindow());
@@ -235,7 +289,7 @@ function setAutoLaunch(enabled) {
 function buildTray() {
     const image = iconImage('tray.png');
     tray = new Tray(image.isEmpty() ? iconImage('icon.png') : image);
-    tray.setToolTip('RFNOTER 闪录');
+    tray.setToolTip('闪录');
     tray.setContextMenu(Menu.buildFromTemplate([
         { label: '打开主窗口', click: showWindow },
         {
@@ -251,7 +305,7 @@ function buildTray() {
         },
         { label: '打开数据目录', click: () => shell.openPath(store.dataDir) },
         { type: 'separator' },
-        { label: '退出 RFNOTER', click: () => { quitting = true; app.quit(); } }
+        { label: '退出闪录', click: () => { quitting = true; app.quit(); } }
     ]));
     tray.on('click', () => {
         if (mainWindow?.isVisible() && mainWindow.isFocused()) mainWindow.hide();
@@ -385,6 +439,20 @@ async function runSelfTest() {
         "getComputedStyle(document.querySelector('.note-card')).borderLeftWidth"
     );
     check('Tailwind 本地构建生效（卡片左边框 4px）', tailwindApplied === '4px', tailwindApplied);
+
+    // 左上角 LOGO 走的是 app:// 取 public/icon.png，路径写错在开发态不一定看得出来
+    const logo = await win.webContents.executeJavaScript(`(() => {
+        const img = document.querySelector('header img');
+        return img ? { complete: img.complete, width: img.naturalWidth, src: img.getAttribute('src') } : null;
+    })()`);
+    check(
+        '左上角 LOGO 图片已加载',
+        !!logo && logo.complete === true && logo.width > 0,
+        JSON.stringify(logo)
+    );
+
+    // 任务栏/窗口标题显示的就是它
+    check('窗口标题为「闪录」', win.getTitle() === '闪录', win.getTitle());
 
     // 布局体检：窗口是 1180 宽，页面不能出现横向溢出把右侧按钮挤出去
     const layout = await win.webContents.executeJavaScript(`(() => {

@@ -5,7 +5,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <!-- Tailwind / Font Awesome 已本地化到 vendor/，桌面端离线也能正常显示 -->
     <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data:; connect-src 'self' https://api.deepseek.com;">
-    <title>快速笔记 | Real Fast Noter</title>
+    <title>闪录</title>
+    <link rel="icon" href="icon.png">
     <script src="vendor/tailwind.js"></script>
     <link href="vendor/font-awesome/css/font-awesome.min.css" rel="stylesheet">
     <script src="tailwind.config.js"></script>
@@ -124,8 +125,8 @@
     <header class="sticky top-0 z-50 bg-white/70 backdrop-blur-md border-b border-gray-200 shadow-sm">
         <div class="container mx-auto px-4 py-3 flex items-center justify-between">
             <div class="flex items-center space-x-2">
-                <i class="fa fa-sticky-note text-primary text-2xl"></i>
-                <h1 class="text-xl font-bold">快速笔记</h1>
+                <img src="icon.png" alt="" class="w-8 h-8 rounded-lg shadow-sm">
+                <h1 class="text-xl font-bold">闪录</h1>
                 <button id="help-btn" class="text-sm text-primary hover:text-primary/80 ml-4 transition-colors duration-150">帮助？</button>
                 <button id="export-btn" class="text-sm text-gray-600 hover:text-gray-800 ml-2 transition-colors duration-150" title="导出笔记">
                     <i class="fa fa-download mr-1"></i>导出
@@ -155,7 +156,7 @@
                     <span class="font-medium">选择模式已开启：</span>
                     <span>左键勾选单个笔记，左键单击集合则勾选或取消勾选集合中的所有笔记喵</span>
                 </p>
-                <button id="close-selection-hint-btn" class="text-blue-600 hover:text-blue-800 transition-colors duration-150">
+                <button id="close-selection-hint-btn" class="text-blue-600 hover:text-blue-800 transition-colors duration-150" title="退出选择模式">
                     <i class="fa fa-times"></i>
                 </button>
             </div>
@@ -165,8 +166,8 @@
     <main class="container mx-auto px-4 py-6">
         <div id="notes-container" class="grid grid-cols-1 gap-3 mb-6"></div>
         <div id="empty-state" class="hidden flex flex-col items-center justify-center py-16 text-center animate-fade-in">
-            <div class="w-24 h-24 mb-4 text-gray-400">
-                <i class="fa fa-sticky-note-o text-6xl"></i>
+            <div class="w-24 h-24 mb-4 opacity-30">
+                <img src="icon.png" alt="" class="w-full h-full">
             </div>
             <h2 class="text-xl font-semibold mb-2">还没有笔记</h2>
             <p class="text-gray-500 mb-6 max-w-md">使用底部的快速输入框开始记录，支持快速添加时间间隔和笔记内容喵</p>
@@ -517,10 +518,6 @@
     <div id="save-indicator" class="fixed bottom-20 right-4 bg-white/70 backdrop-blur-md px-4 py-2 rounded-md shadow-lg flex items-center space-x-2 transform translate-y-10 opacity-0 transition-all duration-300 z-40">
         <i class="fa fa-check-circle text-green-500"></i>
         <span>已保存</span>
-    </div>
-
-    <div id="selection-hint" class="fixed bottom-20 left-4 bg-white/70 backdrop-blur-md px-4 py-2 rounded-md shadow-lg text-sm hidden animate-slide-up z-40">
-        <p class="text-gray-700"><span class="font-medium">选择笔记：</span><span class="text-gray-600">Ctrl+点击选择单个，Shift+点击选择区间，拖动可重新排序</span></p>
     </div>
 
     <script type="module" src="js/app.js"></script>

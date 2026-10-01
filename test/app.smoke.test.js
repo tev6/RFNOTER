@@ -51,6 +51,7 @@ async function bootApp({ serverNotes = [], localNotes = null, confirmAnswer = tr
     const state = {
         serverNotes: [...serverNotes],
         postCount: 0,
+        aiCalls: 0,
         aiSummary: '## 总结\n这是 **AI** 生成的总结。',
         exportedBlobs: []
     };
@@ -73,6 +74,7 @@ async function bootApp({ serverNotes = [], localNotes = null, confirmAnswer = tr
     globalThis.fetch = async (url, options = {}) => {
         const target = String(url);
         if (target.includes('api.deepseek.com')) {
+            state.aiCalls += 1;
             return jsonResponse({ choices: [{ message: { content: state.aiSummary } }] });
         }
         if (target.includes('/api/notes/')) {
@@ -141,8 +143,8 @@ test('保存失败时会如实提示"未同步"，而不是骗用户"已保存"'
     submitQuickAdd(document, window, '一条新笔记');
     await flush(50);
 
-    assert.match(document.getElementById('save-indicator').textContent, /未同步/);
-    assert.ok(document.getElementById('sync-status').textContent.includes('未同步'));
+    assert.match(document.getElementById('save-indicator').textContent, /未写入/);
+    assert.ok(document.getElementById('sync-status').textContent.includes('未写入'));
 });
 
 test('笔记内容不会被当成 HTML 执行', async () => {
@@ -335,4 +337,131 @@ test('帮助弹窗在教程存在时渲染正文', async () => {
     await flush(30);
     assert.match(document.getElementById('help-content').textContent, /教程/);
     assert.equal(document.getElementById('help-content').querySelector('strong').textContent, '教程');
+});
+
+/* ---------------- 回归：曾经真实出现过的体验问题 ---------------- */
+
+test('回归：新增笔记插在当天分组的【最前面】，而不是沉到最末尾', async () => {
+    const existing = [
+        makeNote({ id: 'old-1', content: '旧笔记一', createdAt: 1 }),
+        makeNote({ id: 'old-2', content: '旧笔记二', createdAt: 2 })
+    ];
+    const { document, window } = await bootApp({ serverNotes: existing });
+
+    submitQuickAdd(document, window, '刚写的新笔记');
+    await flush(60);
+
+    const texts = [...document.querySelectorAll('.note-card')].map((el) => el.textContent);
+    assert.equal(texts.length, 3);
+    // 同一天内按创建时间倒序：新笔记 → 旧笔记二 → 旧笔记一
+    assert.match(texts[0], /刚写的新笔记/, '新笔记应出现在第一位');
+    assert.match(texts[1], /旧笔记二/);
+    assert.match(texts[2], /旧笔记一/);
+});
+
+test('回归：新增笔记后分组计数同步更新', async () => {
+    const { document, window } = await bootApp({ serverNotes: [makeNote({ id: 'n1' })] });
+    assert.match(document.querySelector('.note-count').textContent, /1 条笔记/);
+    submitQuickAdd(document, window, '第二条');
+    await flush(60);
+    assert.match(document.querySelector('.note-count').textContent, /2 条笔记/);
+});
+
+test('回归：往折叠的日期分组里新增笔记时会自动展开，不会"隐身"', async () => {
+    const { document, window } = await bootApp({ serverNotes: [] });
+    submitQuickAdd(document, window, '第一条');
+    await flush(60);
+    // 手动折叠今天的分组
+    const header = document.querySelector('.date-header');
+    header.dispatchEvent(new window.Event('click', { bubbles: true }));
+    await flush(20);
+    assert.ok(document.querySelector('.date-group').classList.contains('collapsed'));
+
+    submitQuickAdd(document, window, '折叠状态下新增的笔记');
+    await flush(60);
+    assert.equal(document.querySelector('.date-group').classList.contains('collapsed'), false, '应自动展开');
+    const first = document.querySelector('.note-card');
+    assert.equal(first.classList.contains('hidden'), false, '新笔记必须可见');
+    assert.match(first.textContent, /折叠状态下新增的笔记/);
+});
+
+test('回归：选择模式下一条都没选时，再点按钮可以退出（不会卡住）', async () => {
+    const { document } = await bootApp({ serverNotes: [makeNote({ id: 'n1' })] });
+    const btn = document.getElementById('selection-toggle-btn');
+    const hint = document.getElementById('selection-mode-hint');
+
+    btn.dispatchEvent(new globalThis.window.Event('click', { bubbles: true }));
+    await flush(20);
+    assert.ok(!hint.classList.contains('hidden'), '应进入选择模式');
+    assert.match(btn.textContent, /退出选择模式/, '没有选中项时按钮应显示为可退出');
+
+    btn.dispatchEvent(new globalThis.window.Event('click', { bubbles: true }));
+    await flush(20);
+    assert.ok(hint.classList.contains('hidden'), '应退出选择模式');
+    assert.match(btn.textContent, /选择笔记/);
+});
+
+test('回归：选择模式下选中笔记后，按钮变为确认并进入 AI 配置', async () => {
+    const { document } = await bootApp({ serverNotes: [makeNote({ id: 'n1' })] });
+    const btn = document.getElementById('selection-toggle-btn');
+    btn.dispatchEvent(new globalThis.window.Event('click', { bubbles: true }));
+    await flush(20);
+    document.querySelector('.note-card').dispatchEvent(new globalThis.window.Event('click', { bubbles: true }));
+    await flush(20);
+    assert.match(btn.textContent, /确认，开始AI总结 \(1\)/);
+
+    btn.dispatchEvent(new globalThis.window.Event('click', { bubbles: true }));
+    await flush(20);
+    assert.ok(!document.getElementById('ai-summary-modal').classList.contains('hidden'));
+});
+
+test('回归：右键菜单在小窗口靠右下角时不会越界', async () => {
+    const { document, window } = await bootApp({ serverNotes: [makeNote({ id: 'n1' })] });
+    const menu = document.getElementById('context-menu');
+    // jsdom 没有真实布局，这里给出确定的菜单尺寸
+    menu.getBoundingClientRect = () => ({ width: 200, height: 320, left: 0, top: 0, right: 200, bottom: 320, x: 0, y: 0 });
+    Object.defineProperty(window, 'innerWidth', { value: 800, configurable: true });
+    Object.defineProperty(window, 'innerHeight', { value: 600, configurable: true });
+
+    document.querySelector('.note-card').dispatchEvent(new window.MouseEvent('contextmenu', {
+        bubbles: true, cancelable: true, clientX: 780, clientY: 580
+    }));
+    await flush(20);
+
+    const left = parseFloat(menu.style.left);
+    const top = parseFloat(menu.style.top);
+    assert.ok(left + 200 <= 800, `左边越界了：left=${left}`);
+    assert.ok(top + 320 <= 600, `上边越界了：top=${top}`);
+    assert.ok(left >= 0 && top >= 0, '也不应跑到负坐标');
+});
+
+test('回归：AI 生成期间连点按钮不会重复调用 API（不会重复扣费）', async () => {
+    const { document, state } = await bootApp({ serverNotes: [makeNote({ id: 'n1' })] });
+    const btn = document.getElementById('selection-toggle-btn');
+    btn.dispatchEvent(new globalThis.window.Event('click', { bubbles: true }));
+    await flush(20);
+    document.querySelector('.note-card').dispatchEvent(new globalThis.window.Event('click', { bubbles: true }));
+    await flush(20);
+    btn.dispatchEvent(new globalThis.window.Event('click', { bubbles: true }));
+    await flush(20);
+
+    document.getElementById('api-key').value = 'sk-test';
+    const generate = document.getElementById('generate-summary-btn');
+    generate.dispatchEvent(new globalThis.window.Event('click', { bubbles: true }));
+    generate.dispatchEvent(new globalThis.window.Event('click', { bubbles: true }));
+    generate.dispatchEvent(new globalThis.window.Event('click', { bubbles: true }));
+    await flush(120);
+
+    assert.equal(state.aiCalls, 1, `只应调用一次 API，实际 ${state.aiCalls} 次`);
+    assert.equal(generate.disabled, false, '结束后按钮应恢复可用');
+});
+
+test('回归：界面上显示的是「闪录」与自己的图标，不是旧的「快速笔记」', async () => {
+    const { document } = await bootApp({ serverNotes: [] });
+    const header = document.querySelector('header');
+    assert.match(header.querySelector('h1').textContent, /闪录/);
+    assert.equal(header.querySelector('h1').textContent.includes('快速笔记'), false);
+    const logo = header.querySelector('img');
+    assert.ok(logo, '左上角应该是图片 LOGO');
+    assert.match(logo.getAttribute('src'), /icon\.png/);
 });

@@ -125,6 +125,12 @@ test('未知 API 返回 JSON 404，静态目录仍可访问', async () => {
 
         const pageRes = await fetch(`${baseUrl}/`);
         assert.equal(pageRes.status, 200);
-        assert.match(await pageRes.text(), /快速笔记/);
+        assert.match(await pageRes.text(), /闪录/);
+
+        // 本地化后的静态资源也要能拿到（桌面端离线可用的前提）
+        const vendorRes = await fetch(`${baseUrl}/vendor/tailwind.js`);
+        assert.equal(vendorRes.status, 200);
+        const iconRes = await fetch(`${baseUrl}/icon.png`);
+        assert.equal(iconRes.status, 200);
     });
 });

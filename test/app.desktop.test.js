@@ -136,7 +136,7 @@ test('桌面端读写走 IPC，不再发 HTTP 请求', async () => {
     assert.match(document.getElementById('save-indicator').textContent, /已保存/);
 });
 
-test('桌面端：IPC 写入失败时如实提示未同步，并标记待同步', async () => {
+test('桌面端：IPC 写入失败时如实提示未写入本地文件，并标记待同步', async () => {
     const { document, window, state } = await bootDesktop({ files: { [USER_ID]: [] }, failWrite: true });
 
     document.getElementById('quick-content').value = '写不进去的笔记';
@@ -147,7 +147,8 @@ test('桌面端：IPC 写入失败时如实提示未同步，并标记待同步'
     await flush(60);
 
     assert.equal(state.writes.length, 0);
-    assert.match(document.getElementById('save-indicator').textContent, /未同步/);
+    // 桌面端没有"服务器"这个概念，提示必须说"本地文件"
+    assert.match(document.getElementById('save-indicator').textContent, /未写入本地文件/);
     assert.equal(window.localStorage.getItem(`notes_${USER_ID}_pending`), '1');
     // 即使写盘失败，localStorage 副本仍要保住这条笔记
     const localCopy = JSON.parse(window.localStorage.getItem(`notes_${USER_ID}`));

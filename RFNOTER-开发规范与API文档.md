@@ -28,8 +28,8 @@
 
 | 属性 | 值 |
 |------|-----|
-| 项目名称 | RFNOTER (Real Fast Noter) |
-| 当前版本 | v2.2.0 |
+| 项目名称 | RFNOTER（应用内显示名：闪录） |
+| 当前版本 | v2.2.1 |
 | 架构形式 | 模块化前端 + **双运行形态**：Electron 桌面端（默认）/ Express 网页端，共用同一套 `public/` |
 | 技术栈 | HTML5 + Tailwind CSS v3（本地 vendor）+ Font Awesome 4.7（本地 vendor）+ ES6 Modules + Electron 44 / Express 4 |
 | 数据存储 | 桌面端：`%APPDATA%\RFNOTER\data\`；网页端：`data/` 目录；两者都以 localStorage 作为离线副本 |
@@ -955,7 +955,26 @@ tailwind.config = {
 3. 启动器里**不能用窗口样式 0**（`SW_HIDE`）：BrowserWindow 会继承隐藏状态，
    表现为「进程活着但看不见窗口」。用样式 1。
 
-### 11.7 扩展预留接口
+### 11.7 v2.2.1 主要变更（体验修复）
+
+用户实测反馈的问题，全部已加回归测试（`test/app.smoke.test.js` 末尾的「回归：…」用例）。
+
+| 问题 | 根因 | 修复 |
+|------|------|------|
+| 新建笔记后看不到，必须刷新才回到顶部 | `renderNoteElement` 把新笔记插到了分组**最后一条之后**（注释写的是"最前面"，代码却用了 `lastNoteInGroup.after()`） | 改为 `dateGroupElement.after(noteElement)`；同一天内本就是 createdAt 倒序，插在标题正下方即最前 |
+| 往折叠分组里加笔记等于"隐身" | 只按 `isToday` 判断是否 `hidden`，没考虑分组被手动折叠 | 插入前若分组处于 `collapsed`，先 `setDateGroupCollapsed(group, false)` 展开 |
+| 选择模式进去后退不出来 | `toggleSelectionMode` 在选中 0 条时 `alert` 后直接 `return`，**走不到退出分支** | 选中 0 条时该按钮即"取消"；按钮文案随之变为「退出选择模式」；提示条的 × 也改为退出选择模式 |
+| 编辑/改色/复制后滚动位置被弹回顶部 | `renderNotes()` 开头 `innerHTML = ''` 全量重建 | 重建前后记住并恢复 `window.scrollY` |
+| 右键菜单靠窗口右下角会被截断 | 直接按 `clientX/clientY` 定位，没有夹回可视区 | 先显示再量 `getBoundingClientRect()`，按窗口尺寸夹回（留 8px 边距） |
+| 「生成总结」连点会重复调用 API（重复扣费） | 没有并发保护 | 新增 `summaryInFlight` 标记 + `setSummaryBusy()` 禁用相关按钮，`finally` 中恢复 |
+| 桌面端提示"未同步到**服务器**" | 提示语写死了服务器概念，桌面端根本没有服务器 | 新增 `STORE_LABEL`（桌面端="本地文件"，网页端="服务器"），所有提示语统一走它 |
+| 左上角还是 FA 图标 + "快速笔记" | 硬编码 | 换成本地 `public/icon.png`，名字统一为「闪录」；页面标题、窗口标题、托盘提示与菜单、NSIS 快捷方式名一并改 |
+| 窗口默认 1180×840 在 1280×800 屏幕上超出工作区 | 固定尺寸 | 启动时按 `screen.getPrimaryDisplay().workArea` 夹取；并记住用户调整后的尺寸/位置（`window-state.json`），换显示器后越界的位置会被丢弃 |
+| `scrollIntoView` 不存在时会打断整个新增流程 | 未做保护 | 单独 `try` 包住；滚动失败不影响"笔记已加成功" |
+
+同时清理：删除从未被引用的 `#selection-hint`（文案还在讲 Ctrl/Shift/拖拽等已移除的功能）。
+
+### 11.8 扩展预留接口
 
 | 预留点 | 说明 |
 |--------|------|
@@ -967,5 +986,5 @@ tailwind.config = {
 
 ---
 
-> 📄 本文档版本：v2.2.0
+> 📄 本文档版本：v2.2.1
 > 最后更新：2026-10-01

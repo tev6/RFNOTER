@@ -7,8 +7,15 @@ import {
 import {
     loadNotes, saveNotesToServer, saveNotesLocally, callDeepSeekAPI,
     backupLocalNotes, hasPendingChanges, fetchAvailableModels,
-    setApiKey, getApiKey, ApiError, REQUEST_TIMEOUT_MS
+    setApiKey, getApiKey, ApiError, REQUEST_TIMEOUT_MS, isDesktopApp
 } from './api.js';
+
+/**
+ * 笔记的真源叫什么，两种形态下说法不同：
+ * 桌面端写的是本机文件，网页端写的才是服务器。提示语必须跟着变，
+ * 否则桌面端用户会看到一句"未同步到服务器"而完全不知道在说谁。
+ */
+const STORE_LABEL = isDesktopApp ? '本地文件' : '服务器';
 
 const SAFE_ID_RE = /^[A-Za-z0-9_-]{1,128}$/;
 
@@ -42,6 +49,8 @@ let selectionMode = false;
 let dateGroupNotesMap = new Map();
 let offlineMode = false;
 let lastSaveFailed = false;
+/** AI 请求进行中标记：防止连点重复调用 API（每次都是真金白银） */
+let summaryInFlight = false;
 
 const notesContainer = document.getElementById('notes-container');
 const emptyState = document.getElementById('empty-state');
@@ -144,9 +153,9 @@ async function initializeNotes() {
 
     if (result.needImportConfirm) {
         const confirmed = window.confirm(
-            `检测到本机保存着 ${result.localCount} 条笔记，但服务器上还没有这份数据。\n\n`
-            + '点「确定」：把本地笔记导入到服务器（推荐，续用旧数据）。\n'
-            + '点「取消」：以服务器为准，本地副本会先自动备份。'
+            `检测到本机保存着 ${result.localCount} 条笔记，但${STORE_LABEL}上还没有这份数据。\n\n`
+            + `点「确定」：把本地笔记导入到${STORE_LABEL}（推荐，续用旧数据）。\n`
+            + `点「取消」：以${STORE_LABEL}为准，本地副本会先自动备份。`
         );
         if (confirmed) {
             notes = loadedNotes;
@@ -201,34 +210,40 @@ function initQuickInput() {
 }
 
 function renderNotes() {
+    // 全量重建会把滚动位置弹回顶部；笔记一多（上千条）每次编辑都被弹走非常难受，
+    // 所以重建前后自己记住并恢复。
+    const scrollY = window.scrollY;
     notesContainer.innerHTML = '';
-    if (notes.length === 0) {
-        updateEmptyState();
-        return;
-    }
     updateEmptyState();
-    notes.sort((a, b) => (Number(b.createdAt) || 0) - (Number(a.createdAt) || 0));
-    const notesByDate = groupNotesByDate(notes);
-    Object.keys(notesByDate)
-        .sort((a, b) => (parseDateString(b)?.getTime() || 0) - (parseDateString(a)?.getTime() || 0))
-        .forEach(date => {
-        const dateNotes = notesByDate[date];
-        const isToday = isTodayDate(date);
-        const dateGroupElement = createDateGroupElement(date, dateNotes.length, isToday);
-        notesContainer.appendChild(dateGroupElement);
-        dateNotes.forEach(note => {
-            const noteElement = createNoteElement(note);
-            notesContainer.appendChild(noteElement);
-            if (!isToday) {
-                dateGroupElement.classList.add('collapsed');
-                const toggleIcon = dateGroupElement.querySelector('.toggle-icon');
-                toggleIcon.classList.remove('fa-chevron-down');
-                toggleIcon.classList.add('fa-chevron-right');
-                noteElement.classList.add('hidden');
-            }
-        });
-    });
-    if (selectionMode) bindDateGroupSelectionEvents();
+
+    if (notes.length > 0) {
+        notes.sort((a, b) => (Number(b.createdAt) || 0) - (Number(a.createdAt) || 0));
+        const notesByDate = groupNotesByDate(notes);
+        Object.keys(notesByDate)
+            .sort((a, b) => (parseDateString(b)?.getTime() || 0) - (parseDateString(a)?.getTime() || 0))
+            .forEach(date => {
+                const dateNotes = notesByDate[date];
+                const isToday = isTodayDate(date);
+                const dateGroupElement = createDateGroupElement(date, dateNotes.length, isToday);
+                notesContainer.appendChild(dateGroupElement);
+                dateNotes.forEach(note => {
+                    const noteElement = createNoteElement(note);
+                    notesContainer.appendChild(noteElement);
+                    if (!isToday) {
+                        dateGroupElement.classList.add('collapsed');
+                        const toggleIcon = dateGroupElement.querySelector('.toggle-icon');
+                        if (toggleIcon) {
+                            toggleIcon.classList.remove('fa-chevron-down');
+                            toggleIcon.classList.add('fa-chevron-right');
+                        }
+                        noteElement.classList.add('hidden');
+                    }
+                });
+            });
+        if (selectionMode) bindDateGroupSelectionEvents();
+    }
+
+    if (scrollY > 0) window.scrollTo(0, scrollY);
 }
 
 /** 只切换空状态提示，供增量渲染路径复用。 */
@@ -283,19 +298,24 @@ function renderNoteElement(note) {
     }
 
     const noteElement = createNoteElement(note);
-    if (!isToday) noteElement.classList.add('hidden');
-    // 插到该分组现有笔记的最前面（同一天内按创建时间倒序）
-    let cursor = dateGroupElement.nextElementSibling;
-    let lastNoteInGroup = null;
-    while (cursor && !cursor.classList.contains('date-group')) {
-        if (cursor.classList.contains('note-card')) lastNoteInGroup = cursor;
-        cursor = cursor.nextElementSibling;
+    // 同一天内是按创建时间倒序排列的，所以新笔记必须插在分组标题的正下方（也就是最前面）。
+    // 之前的实现是追加到分组里最后一条笔记之后，结果新建的笔记会沉到当天所有笔记的下方，
+    // 界面上看起来"没生效"，必须刷新（走全量排序）才会回到顶部。
+    if (dateGroupElement.classList.contains('collapsed')) {
+        // 往折叠的分组里插 = 让人看不见，直接展开
+        setDateGroupCollapsed(dateGroupElement, false);
     }
-    if (lastNoteInGroup) lastNoteInGroup.after(noteElement);
-    else dateGroupElement.after(noteElement);
+    dateGroupElement.after(noteElement);
 
     updateDateGroupCount(dateGroupElement);
     if (selectionMode) bindDateGroupSelectionEvents();
+    // 只有新笔记不在可视区时才滚动，避免打断正在看别处的人。
+    // 单独兜住异常：滚动失败绝不能影响"这条笔记已经加好了"这件事。
+    try {
+        if (typeof noteElement.scrollIntoView === 'function') {
+            noteElement.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+        }
+    } catch { /* 忽略：滚动只是锦上添花 */ }
 }
 
 /** 增量移除一条笔记的 DOM，并清理空掉的分组。 */
@@ -512,7 +532,10 @@ function updateSelectionUI() {
         aiSummaryFloatBtn.classList.add('hidden');
     }
     if (selectionMode) {
-        selectionToggleBtn.innerHTML = `<i class="fa fa-check-circle mr-2"></i>确认，开始AI总结 (${count})`;
+        // 文案要如实反映点下去会发生什么，否则用户根本不知道还能取消
+        selectionToggleBtn.innerHTML = count > 0
+            ? `<i class="fa fa-check-circle mr-2"></i>确认，开始AI总结 (${count})`
+            : '<i class="fa fa-times-circle mr-2"></i>退出选择模式';
     }
 }
 
@@ -625,9 +648,8 @@ function setDateGroupCollapsed(dateGroup, collapsed) {
 function initSelectionMode() {
     selectionToggleBtn.addEventListener('click', toggleSelectionMode);
     if (closeSelectionHintBtn) {
-        closeSelectionHintBtn.addEventListener('click', () => {
-            selectionModeHint.classList.add('hidden');
-        });
+        // 提示条是"选择模式已开启"的横幅，关掉它 = 退出选择模式
+        closeSelectionHintBtn.addEventListener('click', () => exitSelectionMode());
     }
 }
 
@@ -760,7 +782,7 @@ async function handleFileImport(event) {
 
         const result = await saveNotes();
         renderNotes();
-        showSaveIndicator(result.ok ? `已导入 ${newNotes.length} 条笔记` : '已导入到本机，尚未同步到服务器');
+        showSaveIndicator(result.ok ? `已导入 ${newNotes.length} 条笔记` : `已导入到本机，尚未写入${STORE_LABEL}`);
     } catch (error) {
         console.error('[RFNOTER] 导入失败', error);
         alert(`导入失败：${error.message}`);
@@ -772,17 +794,19 @@ async function handleFileImport(event) {
 function toggleSelectionMode() {
     if (!selectionMode) {
         enterSelectionMode();
-    } else {
-        if (selectedNotes.size === 0) {
-            alert('请先选择至少一条笔记');
-            return;
-        }
-        if (selectedNotes.size > CONFIG.MAX_SELECTION) {
-            alert(`最多只能选择${CONFIG.MAX_SELECTION}条笔记进行AI总结，请减少选择数量`);
-            return;
-        }
-        openAISummaryModal();
+        return;
     }
+    // 一条都没选时，这个按钮就是"取消"——之前这里直接 alert 后 return，
+    // 导致进入选择模式后不选任何笔记就再也退不出来（只能按 Esc）。
+    if (selectedNotes.size === 0) {
+        exitSelectionMode();
+        return;
+    }
+    if (selectedNotes.size > CONFIG.MAX_SELECTION) {
+        alert(`最多只能选择${CONFIG.MAX_SELECTION}条笔记进行AI总结，请减少选择数量`);
+        return;
+    }
+    openAISummaryModal();
 }
 
 function enterSelectionMode() {
@@ -1002,9 +1026,21 @@ function changeNoteColor(color) {
 function openContextMenu(event, noteId) {
     if (selectionMode) return;
     currentNoteId = noteId;
-    contextMenu.style.top = `${event.clientY}px`;
-    contextMenu.style.left = `${event.clientX}px`;
+    // 先显示再量尺寸：菜单尺寸不固定（有无"颜色标记"子菜单），必须先渲染才能量准
     contextMenu.classList.remove('hidden');
+    const rect = contextMenu.getBoundingClientRect();
+    const margin = 8;
+    let left = event.clientX;
+    let top = event.clientY;
+    // 靠右/靠下时往回缩，否则菜单会被窗口边缘截断、点不到后面的项
+    if (left + rect.width + margin > window.innerWidth) {
+        left = Math.max(margin, window.innerWidth - rect.width - margin);
+    }
+    if (top + rect.height + margin > window.innerHeight) {
+        top = Math.max(margin, window.innerHeight - rect.height - margin);
+    }
+    contextMenu.style.left = `${left}px`;
+    contextMenu.style.top = `${top}px`;
     // 注意：这里不能再 addEventListener。监听器统一在 bindEventListeners 里绑定一次，
     // 否则每开一次右键菜单就多一份 toggle 监听，行为会随打开次数漂移。
 }
@@ -1029,12 +1065,13 @@ function persistViewState() {
 function updateSyncStatus() {
     const badge = document.getElementById('sync-status');
     if (!badge) return;
+    const warnClass = 'text-xs px-2 py-1 rounded-full bg-amber-100 text-amber-800';
     if (offlineMode) {
-        badge.textContent = '离线模式 · 数据仅保存在本机';
-        badge.className = 'text-xs px-2 py-1 rounded-full bg-amber-100 text-amber-800';
+        badge.textContent = `读取${STORE_LABEL}失败 · 正在使用本机副本`;
+        badge.className = warnClass;
     } else if (hasPendingChanges()) {
-        badge.textContent = '有改动未同步到服务器';
-        badge.className = 'text-xs px-2 py-1 rounded-full bg-amber-100 text-amber-800';
+        badge.textContent = `有改动未写入${STORE_LABEL}`;
+        badge.className = warnClass;
     } else {
         badge.textContent = '';
         badge.className = 'hidden';
@@ -1048,7 +1085,7 @@ async function saveNotes() {
         offlineMode = false;
         showSaveIndicator('已保存');
     } else {
-        showSaveIndicator('未同步到服务器，点击重试', { failed: true });
+        showSaveIndicator(`未写入${STORE_LABEL}，点击重试`, { failed: true });
     }
     updateSyncStatus();
     return result;
@@ -1261,7 +1298,20 @@ function closeAISummaryModal() {
     aiSummaryModal.classList.add('hidden');
 }
 
+/** 生成中禁用所有会触发 API 调用的按钮，避免连点扣多次费。 */
+function setSummaryBusy(busy) {
+    summaryInFlight = busy;
+    ['generate-summary-btn', 'retry-summary-btn', 'regenerate-summary-btn'].forEach((id) => {
+        const btn = document.getElementById(id);
+        if (!btn) return;
+        btn.disabled = busy;
+        btn.classList.toggle('opacity-60', busy);
+        btn.classList.toggle('pointer-events-none', busy);
+    });
+}
+
 async function generateSummary() {
+    if (summaryInFlight) return;
     const apiKey = document.getElementById('api-key').value.trim();
     if (!apiKey) {
         alert('请输入 DeepSeek API 密钥');
@@ -1296,12 +1346,15 @@ async function generateSummary() {
     summaryContent.classList.add('hidden');
     summaryError.classList.add('hidden');
     resultNoteCount.textContent = selectedNoteList.length;
+    setSummaryBusy(true);
     try {
         const prompt = buildPrompt(requestData);
         const summary = await callDeepSeekAPI(apiKey, model, prompt, temperature);
         showSummaryResult(summary, selectedNoteList.length);
     } catch (error) {
         showSummaryError(error);
+    } finally {
+        setSummaryBusy(false);
     }
 }
 
@@ -1438,6 +1491,7 @@ function retrySummary() {
 }
 
 async function generateSummaryFromConfig() {
+    if (summaryInFlight) return;
     try {
         const apiKey = getApiKey();
         if (!apiKey) {
@@ -1447,11 +1501,14 @@ async function generateSummaryFromConfig() {
         const { requestData } = currentSummaryConfig;
         const { model, temperature } = requestData.apiConfig;
         const prompt = buildPrompt(requestData);
+        setSummaryBusy(true);
         const summary = await callDeepSeekAPI(apiKey, model, prompt, temperature);
         resultNoteCount.textContent = requestData.selectedNotes.length;
         showSummaryResult(summary, requestData.selectedNotes.length);
     } catch (error) {
         showSummaryError(error);
+    } finally {
+        setSummaryBusy(false);
     }
 }
 
