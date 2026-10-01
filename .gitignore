@@ -6,3 +6,6 @@ data/
 # 原子写入的临时文件（正常情况不会残留）
 data/*.tmp
 *.tmp
+
+# electron-builder 产物
+dist/

@@ -7,6 +7,8 @@
   "scripts": {
     "app": "electron .",
     "app:selftest": "electron . --selftest",
+    "dist": "electron-builder --win --x64",
+    "dist:dir": "electron-builder --win --x64 --dir",
     "start": "node server.js",
     "dev": "node server.js",
     "test": "node --test"
@@ -28,6 +30,7 @@
   },
   "devDependencies": {
     "electron": "^44.5.1",
+    "electron-builder": "^26.15.3",
     "jsdom": "^29.1.1"
   }
 }

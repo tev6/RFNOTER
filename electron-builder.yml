@@ -1,0 +1,41 @@
+appId: com.tev6.rfnoter
+productName: RFNOTER
+copyright: Copyright © 2026 tev6
+
+directories:
+  output: dist
+  buildResources: build
+
+# 主进程只用到 Electron 与 Node 内置模块，没有任何运行时 npm 依赖，
+# 所以 node_modules 整个排除掉，包更小也少一类不确定因素。
+files:
+  - package.json
+  - electron/**/*
+  - public/**/*
+  - '!**/node_modules/**/*'
+  - '!**/*.map'
+
+# public/ 会被打进 app.asar；main.js 里读文件与图标都走 fs，
+# 因此不依赖 net.fetch 与 createFromPath 对 asar 的支持。
+asar: true
+
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+  icon: build/icon.ico
+  artifactName: RFNOTER-Setup-${version}.${ext}
+
+nsis:
+  oneClick: false                      # 显示安装向导，而不是静默装到默认位置
+  perMachine: false                    # 装到用户目录，不需要管理员权限
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: RFNOTER 闪录
+  installerIcon: build/icon.ico
+  uninstallerIcon: build/icon.ico
+  # 关键：卸载时绝不能删用户的笔记（%APPDATA%\rfnoter）
+  deleteAppDataOnUninstall: false
+  runAfterFinish: true

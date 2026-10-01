@@ -1,11 +1,11 @@
 import {
     app, BrowserWindow, Tray, Menu, globalShortcut, ipcMain,
-    nativeImage, shell, protocol, net
+    nativeImage, shell, protocol
 } from 'electron';
 import path from 'node:path';
 import fs from 'node:fs';
 import os from 'node:os';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
 import { createNoteStore } from './store.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -16,12 +16,23 @@ const IS_SELFTEST = process.argv.includes('--selftest');
 /** 全局热键候选：第一个能被注册成功的就用它。 */
 const HOTKEY_CANDIDATES = ['Control+Shift+Space', 'Alt+Shift+N', 'Control+Alt+N'];
 const APP_ORIGIN = 'app://rfnoter';
+/** 存储目录名固定写死，见下方 setPath 的注释。 */
+const APP_DATA_DIR_NAME = 'rfnoter';
 
-// 自检模式用独立的 userData，绝不碰真实数据
+// 数据目录必须**与 productName 无关**。
+// 打包后 electron-builder 会往 package.json 写入 productName，app.getName() 随之改变，
+// app.getPath('userData') 就会跟着搬到 %APPDATA%\RFNOTER —— 用户会以为笔记全丢了。
+// 所以这里显式钉死，保证开发态与打包态、以及未来改名都指向同一个目录。
 if (IS_SELFTEST) {
+    // 自检模式用独立的 userData，绝不碰真实数据
     const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'rfnoter-selftest-'));
     app.setPath('userData', tmpRoot);
     app.setPath('sessionData', tmpRoot);
+} else {
+    const stableUserData = path.join(app.getPath('appData'), APP_DATA_DIR_NAME);
+    fs.mkdirSync(stableUserData, { recursive: true });
+    app.setPath('userData', stableUserData);
+    app.setPath('sessionData', stableUserData);
 }
 
 // 让渲染进程用 app:// 协议加载：CSP 的 'self' 才有意义，
@@ -39,10 +50,34 @@ let quitting = false;
 
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+/** app:// 需要自己给 MIME，否则 .js/.css 会被当成 octet-stream 而被浏览器拒绝执行。 */
+const MIME_TYPES = {
+    '.html': 'text/html; charset=utf-8',
+    '.js': 'text/javascript; charset=utf-8',
+    '.mjs': 'text/javascript; charset=utf-8',
+    '.css': 'text/css; charset=utf-8',
+    '.json': 'application/json; charset=utf-8',
+    '.md': 'text/markdown; charset=utf-8',
+    '.txt': 'text/plain; charset=utf-8',
+    '.png': 'image/png',
+    '.jpg': 'image/jpeg',
+    '.jpeg': 'image/jpeg',
+    '.gif': 'image/gif',
+    '.svg': 'image/svg+xml',
+    '.ico': 'image/x-icon',
+    '.woff': 'font/woff',
+    '.woff2': 'font/woff2',
+    '.ttf': 'font/ttf',
+    '.eot': 'application/vnd.ms-fontobject'
+};
+
+/** 从 asar 里读图标：createFromPath 在 asar 路径下不可靠，统一走 buffer。 */
 function iconImage(fileName) {
-    const filePath = path.join(ASSETS_DIR, fileName);
-    if (!fs.existsSync(filePath)) return nativeImage.createEmpty();
-    return nativeImage.createFromPath(filePath);
+    try {
+        return nativeImage.createFromBuffer(fs.readFileSync(path.join(ASSETS_DIR, fileName)));
+    } catch {
+        return nativeImage.createEmpty();
+    }
 }
 
 function registerAppProtocol() {
@@ -53,10 +88,16 @@ function registerAppProtocol() {
         if (!target.startsWith(PUBLIC_DIR + path.sep) && target !== PUBLIC_DIR) {
             return new Response('Forbidden', { status: 403 });
         }
-        if (!fs.existsSync(target) || !fs.statSync(target).isFile()) {
+        try {
+            // 用 fs 读再自己构造 Response，而不是 net.fetch(file://…)。
+            // 打包后 public/ 位于 app.asar 内部，net.fetch 对 asar 路径不可靠。
+            // Electron 给 fs 打过补丁，读 asar 内的文件与普通文件一致。
+            const data = fs.readFileSync(target);
+            const mime = MIME_TYPES[path.extname(target).toLowerCase()] || 'application/octet-stream';
+            return new Response(data, { headers: { 'Content-Type': mime } });
+        } catch {
             return new Response('Not Found', { status: 404 });
         }
-        return net.fetch(pathToFileURL(target).toString());
     });
 }
 
@@ -179,6 +220,11 @@ function registerHotkey() {
 }
 
 function setAutoLaunch(enabled) {
+    if (app.isPackaged) {
+        // 打包后 process.execPath 就是应用本体，不能再把项目路径当参数传进去
+        app.setLoginItemSettings({ openAtLogin: enabled });
+        return;
+    }
     app.setLoginItemSettings({
         openAtLogin: enabled,
         path: process.execPath,
