@@ -29,21 +29,27 @@
 | 属性 | 值 |
 |------|-----|
 | 项目名称 | RFNOTER (Real Fast Noter) |
-| 当前版本 | v1.2.0 |
-| 架构形式 | 模块化（HTML + CSS + JS 分离）+ Node.js 后端 |
-| 技术栈 | HTML5 + Tailwind CSS v3 (CDN) + Font Awesome 4.7 + ES6 Modules + Express.js |
-| 数据存储 | 服务端文件系统（`data/` 目录）+ localStorage 备份 |
-| 外部依赖 | `cdn.tailwindcss.com`、`cdn.jsdelivr.net` (Font Awesome)、`api.deepseek.com` |
+| 当前版本 | v2.2.0 |
+| 架构形式 | 模块化前端 + **双运行形态**：Electron 桌面端（默认）/ Express 网页端，共用同一套 `public/` |
+| 技术栈 | HTML5 + Tailwind CSS v3（本地 vendor）+ Font Awesome 4.7（本地 vendor）+ ES6 Modules + Electron 44 / Express 4 |
+| 数据存储 | 桌面端：`%APPDATA%\RFNOTER\data\`；网页端：`data/` 目录；两者都以 localStorage 作为离线副本 |
+| 外部依赖 | 仅 `api.deepseek.com`（AI 总结）。Tailwind 与 Font Awesome 已本地化，离线可用 |
 
 ### 1.2 架构演进
 
-- **v1.1.x**：单 HTML 文件（约 2500 行），所有代码集成在一个文件中
+- **v1.1.x**：单 HTML 文件（约 2500 行），所有代码集成在一个文件中，纯 localStorage
 - **v1.2.0**：模块化拆分：
   - `public/index.html` — 页面结构与样式
   - `public/js/app.js` — 应用主逻辑
   - `public/js/utils.js` — 工具函数
   - `public/js/api.js` — API 调用与数据持久化
   - `server.js` — Express 后端服务
+- **v2.1.0**：修数据同步/安全问题，引入测试（见 §11.5）
+- **v2.2.0**：新增 Electron 桌面端（见 §11.6）
+  - `electron/main.js` / `preload.cjs` / `store.js` — 主进程、桥、文件存储
+  - `api.js` 变为**存储适配层**：有 `window.rfnoter` 走 IPC 读写本地文件，没有则走 `/api`
+  - 静态资源本地化到 `public/vendor/`，桌面端离线可用
+  - 前端业务逻辑（`app.js` / `utils.js` / `index.html`）**零改动复用**
 
 ---
 
@@ -51,24 +57,38 @@
 
 ```
 RFNOTER/
+├── electron/                   # 桌面端（v2.2.0）
+│   ├── main.js                 # 主进程：窗口/托盘/热键/IPC/自检
+│   ├── preload.cjs             # contextBridge 暴露 window.rfnoter
+│   ├── store.js                # 本地文件读写（原子写 + userId 白名单）
+│   └── assets/                 # icon.png / icon.ico / tray.png
 ├── public/
-│   ├── index.html              # 主页面
+│   ├── index.html              # 主页面（两种形态共用）
 │   ├── tailwind.config.js      # Tailwind 配置
-│   ├── css/
-│   │   └── style.css           # 自定义样式（如有）
+│   ├── flash-noter-tutorial.md # 应用内「帮助」加载的教程
+│   ├── vendor/                 # 本地化的 Tailwind 3.4.16 与 Font Awesome 4.7
 │   └── js/
-│       ├── app.js              # 应用主逻辑（~1300 行）
-│       ├── utils.js            # 工具函数（~97 行）
-│       └── api.js              # API 调用与数据持久化（~98 行）
-├── data/                       # 服务端数据目录（运行时创建）
-│   └── notes_{userId}.json     # 用户笔记数据文件
-├── server.js                   # Express 后端服务
+│       ├── app.js              # 应用主逻辑
+│       ├── utils.js            # 工具函数
+│       └── api.js              # 存储适配层 + DeepSeek 调用
+├── test/                       # node:test 测试（52 个用例）
+│   ├── utils.test.js
+│   ├── electron-store.test.js
+│   ├── server.test.js
+│   ├── app.smoke.test.js       # jsdom：网页端
+│   └── app.desktop.test.js     # jsdom：桌面端（IPC）
+├── data/                       # 网页端数据目录（运行时创建）
+│   └── notes_{userId}.json
+├── server.js                   # Express 后端（网页端）
+├── RFNOTER.vbs                 # 桌面端双击启动器（必须保持纯 ASCII）
 ├── package.json                # 项目配置
 ├── v1.1.2.0.html               # 旧版本单文件（归档）
-├── flash-noter-tutorial.md     # 帮助教程
 ├── RFNOTER-用户操作手册.md      # 用户文档
 └── RFNOTER-开发规范与API文档.md  # 本文档
 ```
+
+> 已移除：`public/css/style.css`（从未被 index.html 引用，样式实际在 index.html 内联的
+> `<style type="text/tailwindcss">` 里）。
 
 ---
 
@@ -139,12 +159,23 @@ interface ApiConfig {
 | 键名 | 位置 | 类型 | 说明 |
 |------|------|------|------|
 | `userId` | localStorage | string | 用户唯一标识，格式：`UUID-时间戳` |
-| `notes_${userId}` | localStorage | string (JSON) | 笔记数组备份 |
+| `notes_${userId}` | localStorage | string (JSON) | 笔记数组离线副本 |
 | `notes_${userId}_pending` | localStorage | `'1'` | 存在未同步改动时的标记（v2.1.0） |
 | `notes_${userId}_backup_*` | localStorage | string (JSON) | 覆盖本地副本前的自动备份，最多 3 份（v2.1.0） |
-| `notes_${userId}.json` | 服务端 `data/` | JSON 文件 | 主数据源 |
+| `notes_${userId}.json` | 真源文件 | JSON 文件 | 主数据源，见下表 |
+
+真源文件的位置随运行形态而变：
+
+| 运行形态 | 真源路径 | 说明 |
+|----------|----------|------|
+| 桌面端（Electron） | `%APPDATA%\RFNOTER\data\notes_${userId}.json` | 由 `electron/store.js` 读写，走 IPC |
+| 网页端（Express） | `<项目>/data/notes_${userId}.json` | 由 `server.js` 读写，走 `/api` |
 
 > ⚠️ **v1.2.0 变更**：`deepseek_api_key` 已从 localStorage 中移除，改为内存存储。
+>
+> ⚠️ **v2.2.0 变更**：桌面端首次启动时若真源目录为空、而同目录下存在旧版
+> `notes_*.json`（例如从网页端迁移过来），会沿用其中最新的那个 `userId`
+> 并询问是否导入，避免出现「新身份 + 旧数据看不见」。
 
 ---
 
@@ -155,11 +186,11 @@ interface ApiConfig {
 ```javascript
 const CONFIG = {
     MAX_SELECTION: 100,              // 最大选择笔记数
-    API_TIMEOUT: 30000,              // API 调用超时（毫秒）
+    API_TIMEOUT: REQUEST_TIMEOUT_MS, // API 调用超时（真实值来自 api.js，60 秒）
     DEFAULT_DURATION_MINUTES: 40,    // 默认笔记持续时间
     TAG_LIMIT: 20,                   // 标签最大字符单位
-    MAX_CONTENT_LENGTH: 5000,        // 内容最大长度
-    MAX_DETAILS_LENGTH: 10000,       // 详情最大长度
+    MAX_CONTENT_LENGTH: 5000,        // 内容最大长度（导入校验用）
+    MAX_DETAILS_LENGTH: 10000,       // 详情最大长度（导入校验用）
     ANIMATION_DURATION: 200,         // 动画持续时间（毫秒）
     COLOR_MAP: {
         'note1': '#3b82f6',          // 蓝色
@@ -463,15 +494,79 @@ const CONFIG = {
 ```typescript
 interface LoadResult {
   notes: Note[];
-  source: 'server' | 'local';
-  offline: boolean;             // 服务端不可用，用的是本地副本
+  source: 'server' | 'filesystem' | 'local';  // 'filesystem' 为桌面端（v2.2.0）
+  offline: boolean;             // 真源不可用，用的是本地副本
   pending: boolean;             // 本地有未同步改动
-  needPush?: boolean;           // 需要把本地改动推回服务端
-  needImportConfirm?: boolean;  // 服务端为空而本地有数据，需用户确认是否导入
+  needPush?: boolean;           // 需要把本地改动写回真源
+  needImportConfirm?: boolean;  // 真源为空而本地有数据，需用户确认是否导入
   localCount?: number;
   error?: string;
 }
 ```
+
+#### 存储适配层（v2.2.0）
+
+`api.js` 在模块加载时判断一次运行形态，之后 `loadNotes()` / `saveNotesToServer()` 内部走不同分支，
+**对 `app.js` 完全透明**：
+
+```javascript
+const desktopBridge = (typeof window !== 'undefined' && window.rfnoter?.isDesktop)
+    ? window.rfnoter : null;
+export const isDesktopApp = desktopBridge !== null;
+```
+
+| 分支 | 真源 | 失败时的表现 |
+|------|------|--------------|
+| 桌面端 | `window.rfnoter.readNotes/writeNotes`（IPC → `electron/store.js`） | 置 `_pending`，提示「未同步」 |
+| 网页端 | `fetch('/api/notes/:userId')` | 同上 |
+
+> ⚠️ 因为 `desktopBridge` 是模块加载时读取的，**测试桌面端分支时必须用独立进程**
+> （见 `test/app.desktop.test.js` 顶部注释），同一个进程里混跑会拿到第一次的形态。
+
+### 5.8 桌面端模块（electron/，v2.2.0）
+
+#### `electron/main.js`
+
+| 职责 | 说明 |
+|------|------|
+| 窗口 | 1180×840，`show:false` + `ready-to-show` 再显示；另有 2 秒兜底强制显示，避免「进程活着但看不见窗口」 |
+| 页面加载 | 自定义 `app://` 协议（`registerSchemesAsPrivileged` + `protocol.handle`）。**不能用 `file://`**：Chromium 会拒绝 `fetch` 本地文件（帮助文档会打不开），CSP 的 `'self'` 也失效 |
+| 托盘 | 打开主窗口 / 快速记录 / 开机自启 / 打开数据目录 / 退出；关闭窗口 = 收进托盘 |
+| 全局热键 | 依次尝试 `Control+Shift+Space` → `Alt+Shift+N` → `Control+Alt+N`，全部占用时托盘菜单会标注 |
+| 单实例 | `app.requestSingleInstanceLock()`，第二次启动只唤起已有窗口 |
+| 开机自启 | `app.setLoginItemSettings()`，托盘菜单里勾选 |
+| 自检 | `--selftest`：19 项，含真实页面加载、IPC 落盘、布局体检、控制台错误探针 |
+| 调试 | `--layout-debug` 打印窗口/页面布局数据；`--screenshot=<path>` 让 Electron 自己截自己的窗口（比外部截图工具可靠，不受 DPI 缩放影响） |
+
+IPC 通道：
+
+| 通道 | 方向 | 签名 |
+|------|------|------|
+| `notes:read` | renderer → main | `(userId) => {ok, notes, exists}` |
+| `notes:write` | renderer → main | `(userId, notes) => {ok, count?, error?}` |
+| `notes:list-user-ids` | renderer → main | `() => [{userId, mtimeMs, size}]`（按修改时间倒序） |
+| `app:info` | renderer → main | `() => {version, dataDir, hotkey, platform}` |
+| `app:open-data-dir` | renderer → main | `() => void` |
+| `quick-capture` | main → renderer | 热键触发，渲染进程收到后聚焦 `#quick-content` |
+
+#### `electron/preload.cjs`
+
+`contextBridge.exposeInMainWorld('rfnoter', {...})` 只暴露上面这几个方法；
+`contextIsolation: true` + `nodeIntegration: false`，页面拿不到 Node。
+
+> 必须用 `.cjs` 后缀：`package.json` 是 `"type": "module"`，而 preload 走 CommonJS。
+
+#### `electron/store.js`
+
+与 `server.js` 同样的语义（返回 `{ok, ...}`），但直接落盘：
+
+| 方法 | 说明 |
+|------|------|
+| `fileFor(userId)` | `userId` 白名单 `[A-Za-z0-9_-]{1,128}`，非法返回 `null` |
+| `read(userId)` | 不存在 → `{ok:true, notes:[], exists:false}`；损坏 → `{ok:false, error}` |
+| `write(userId, notes)` | 先写 `.tmp` 再 `rename`，原子替换 |
+| `listUserIds()` | 列出目录内合法文件，按 mtime 倒序 |
+| `migrateFrom(dir)` | 把旧版目录里的 `notes_*.json` 搬到数据目录（只补齐缺失项，不覆盖） |
 
 ---
 
@@ -627,12 +722,17 @@ validateNoteImport() 校验
 
 ```
 DOMContentLoaded
-├── initQuickInput()        # 初始化快速输入区
-├── loadNotesFromServer()   # 从服务端加载笔记（失败回退 localStorage）
-├── renderNotes()           # 渲染笔记列表
-├── bindEventListeners()    # 绑定核心事件
+├── bindEventListeners()    # 先绑事件：数据万一异常，界面也不会变成点不动的死图
 ├── bindAIEventListeners()  # 绑定 AI 相关事件
-└── initImportExport()      # 初始化导入导出（v1.2.0 新增）
+├── initImportExport()      # 初始化导入导出（v1.2.0 新增）
+├── initQuickInput()        # 初始化快速输入区
+├── initDesktopBridge()     # 桌面端：注册全局热键回调（v2.2.0）
+└── await initializeNotes() # 加载 + 对账（可能弹「是否导入」确认）
+    ├── loadNotes()         # 桌面端走 IPC，网页端走 /api
+    ├── normalizeNote()     # 补齐字段、校验 id / 日期 / 时间
+    ├── saveNotes()         # 用户确认导入、或本地有未同步改动时写回真源
+    ├── renderNotes()       # 渲染笔记列表
+    └── updateSyncStatus()  # 刷新顶部同步状态徽标
 ```
 
 ### 8.2 核心事件绑定清单
@@ -759,15 +859,19 @@ tailwind.config = {
 ### 10.2 CSP 配置
 
 ```html
+<!-- v2.2.0：Tailwind 与 Font Awesome 已本地化，不再需要 CDN 域名 -->
 <meta http-equiv="Content-Security-Policy" content="
     default-src 'self';
-    script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdn.tailwindcss.com;
-    style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net;
-    font-src 'self' https://cdn.jsdelivr.net;
-    connect-src 'self' https://api.deepseek.com;
+    script-src 'self' 'unsafe-eval';
+    style-src 'self' 'unsafe-inline';
+    font-src 'self';
     img-src 'self' data:;
+    connect-src 'self' https://api.deepseek.com;
 ">
 ```
+
+> `'unsafe-eval'` 是 Tailwind Play CDN 版本在浏览器里编译 CSS 所必需的。
+> 桌面端用 `app://` 协议加载页面，否则 `'self'` 没有意义（`file://` 是不透明源）。
 
 ### 10.3 待修复安全问题
 
@@ -793,18 +897,20 @@ tailwind.config = {
 - `app.js` 依赖 `utils.js` 和 `api.js`
 - `api.js` 依赖 `utils.js`（`generateUUID`）
 - 服务端 `server.js` 也使用 ESM（`package.json` 里 `"type": "module"`，Node ≥ 20.11）
+- 桌面端 `electron/main.js` 同样用 ESM；**但 `preload.cjs` 必须是 CommonJS**（`.cjs` 后缀）
+- `app.js` 顶部对 `window.rfnoter` 的使用是**可选**的，网页端没有这个对象也必须能跑
 
 ### 11.2 数据持久化约束
 
-- 主数据源：服务端文件系统（`data/notes_${userId}.json`），写入为原子操作
+- 主数据源（真源）：桌面端 `%APPDATA%\RFNOTER\data\`，网页端 `data/`，写入均为原子操作
 - 备份：localStorage（`notes_${userId}`），另有 `_pending` 未同步标记与 `_backup_*` 自动备份
 - API 密钥：仅内存存储，页面刷新后丢失
 - 同步失败不会静默：界面顶部会显示「离线模式 / 有改动未同步」，保存提示可点击重试
 
 ### 11.3 性能注意事项
 
-- `renderNotes()` 仍为全量渲染，用于初始加载和编辑后重渲染
-- `quickAddNote()` 和 `deleteNote()` 使用增量渲染（`renderNoteElement` / `removeNoteElement`）
+- `renderNotes()` 为全量渲染，用于初始加载和编辑后重渲染；`quickAddNote()` / `deleteNote()` 走增量渲染
+- `store.js` 的原子写入在 367KB（约 1050 条）下实测：写 7ms / 读 5ms
 - 日期分组折叠状态通过 DOM class 切换，不持久化
 
 ### 11.4 已知代码异味
@@ -825,16 +931,41 @@ tailwind.config = {
 | `index.html` | 移除 `.note-card` 上残留的 `touch-none`（手机上无法滚动列表）；更新模型选项 |
 | 测试 | 新增 `test/`（node:test + jsdom），33 个用例 |
 
-### 11.6 扩展预留接口
+### 11.6 v2.2.0 主要变更（桌面端）
+
+| 模块 | 变更 |
+|------|------|
+| `electron/main.js` | 新增：窗口、托盘、全局热键、单实例锁、开机自启、IPC、`app://` 协议、自检与调试开关 |
+| `electron/preload.cjs` | 新增：`contextBridge` 暴露 `window.rfnoter` |
+| `electron/store.js` | 新增：本地文件读写（原子写 + `userId` 白名单 + 旧数据迁移） |
+| `api.js` | 变为存储适配层：桌面端走 IPC、网页端走 `/api`，对 `app.js` 透明 |
+| `app.js` | 仅新增 `initDesktopBridge()`（热键回调聚焦输入框），业务逻辑零改动 |
+| `index.html` | 引用改为本地 `vendor/`，CSP 收紧；新增 `#sync-status` 徽标 |
+| `package.json` | `main` 指向 `electron/main.js`；新增 `app` / `app:selftest` 脚本；新增 devDependency `electron` |
+| 依赖 | 删除死文件 `public/css/style.css`；新增 `public/vendor/`（Tailwind 3.4.16 + Font Awesome 4.7，约 640KB） |
+| 测试 | 新增 `electron-store.test.js`（12）与 `app.desktop.test.js`（7），共 52 个用例 |
+
+**Windows 特有的三个坑（都已修复，勿回退）**：
+
+1. `ELECTRON_RUN_AS_NODE` 被继承时，`electron.exe` 会退化成纯 Node 并报
+   `does not provide an export named 'BrowserWindow'`。清除时**只能用 Remove，不能置空**——
+   Electron 判断的是变量**是否存在**，置空等于又把它创建回来。
+2. `RFNOTER.vbs` **必须保持纯 ASCII**：VBScript 按系统 ANSI 解析，UTF-8 中文会吃掉字符串
+   的结束引号，报「未结束的字符串常量」。
+3. 启动器里**不能用窗口样式 0**（`SW_HIDE`）：BrowserWindow 会继承隐藏状态，
+   表现为「进程活着但看不见窗口」。用样式 1。
+
+### 11.7 扩展预留接口
 
 | 预留点 | 说明 |
 |--------|------|
-| `Ctrl + 点击` | 多选逻辑预留，当前未实现 |
-| `Shift + 点击` | 区间选择预留，当前未实现 |
+| `Ctrl + 点击` / `Shift + 点击` | 多选逻辑预留，当前未实现 |
 | 拖放功能 | 已完全禁用 |
 | IndexedDB | 当前使用文件系统 + localStorage，可预留迁移接口 |
+| 独立快速捕捉小窗 | 当前热键是「呼出主窗口 + 聚焦输入框」，可改为无边框悬浮窗 |
+| 自动更新 | 未接入 electron-updater |
 
 ---
 
-> 📄 本文档版本：v1.2.0  
-> 最后更新：2026-05-16
+> 📄 本文档版本：v2.2.0
+> 最后更新：2026-10-01
