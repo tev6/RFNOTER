@@ -88,11 +88,23 @@ document.addEventListener('DOMContentLoaded', async () => {
         bindAIEventListeners();
         initImportExport();
         initQuickInput();
+        initDesktopBridge();
     } catch (e) {
         console.error('[RFNOTER] 界面初始化失败', e);
     }
     await initializeNotes();
 });
+
+/** 桌面端：全局热键唤出时，把光标直接放进快速输入框。 */
+function initDesktopBridge() {
+    if (!window.rfnoter?.onQuickCapture) return;
+    window.rfnoter.onQuickCapture(() => {
+        if (selectionMode) exitSelectionMode();
+        const input = document.getElementById('quick-content');
+        input.focus();
+        input.select();
+    });
+}
 
 /** 把外部数据（服务端文件 / localStorage）补齐成完整、类型正确的笔记对象。 */
 function normalizeNote(raw) {

@@ -8,6 +8,16 @@ const USER_ID_RE = /^[A-Za-z0-9_-]{1,128}$/;
 export const MAX_TOKENS = 4000;
 
 /**
+ * 桌面端（Electron）由 preload 注入 window.rfnoter。
+ * 有它就直接读写本地文件，不再需要 HTTP 服务；没有就是网页版，继续走 /api。
+ */
+const desktopBridge = (typeof window !== 'undefined' && window.rfnoter && window.rfnoter.isDesktop)
+    ? window.rfnoter
+    : null;
+
+export const isDesktopApp = desktopBridge !== null;
+
+/**
  * API 密钥只放在内存里（v1.2.0 起不再写入 localStorage），刷新页面即失效。
  * 这是有意的安全取舍：XSS 或本地文件泄露都拿不到密钥。
  */
@@ -33,9 +43,35 @@ export class ApiError extends Error {
 }
 
 let userId = localStorage.getItem('userId');
-if (!userId || !USER_ID_RE.test(userId)) {
+if (userId && !USER_ID_RE.test(userId)) userId = null;
+// 桌面端首个版本可能还没有 userId，需要先看看磁盘上有没有现成的笔记文件（见 ensureUserId）
+if (!userId && !isDesktopApp) {
     userId = generateUUID() + '-' + Date.now();
     localStorage.setItem('userId', userId);
+}
+
+/**
+ * 保证 userId 存在。
+ * 桌面端首启时如果磁盘上已经有笔记文件（例如从网页版迁移过来），就沿用它的 userId，
+ * 这样旧数据能直接接上，而不是新生成一个 id 让用户觉得"笔记没了"。
+ */
+async function ensureUserId() {
+    if (userId) return userId;
+    if (isDesktopApp) {
+        try {
+            const existing = await desktopBridge.listUserIds();
+            if (Array.isArray(existing) && existing.length > 0) {
+                userId = existing[0].userId;
+                localStorage.setItem('userId', userId);
+                return userId;
+            }
+        } catch (e) {
+            console.warn('[RFNOTER] 读取已有数据文件失败，改为新建标识', e);
+        }
+    }
+    userId = generateUUID() + '-' + Date.now();
+    localStorage.setItem('userId', userId);
+    return userId;
 }
 
 export function getUserId() {
@@ -107,15 +143,38 @@ export function backupLocalNotes() {
 /**
  * 加载笔记。返回结构里带上「数据从哪来」，让界面能如实告诉用户状态。
  *
- * 同步策略（服务端为唯一真源，本地只做离线副本）：
- * 1. 请求失败        -> 用本地副本，标记 offline
- * 2. 本地有待同步改动 -> 用本地副本（它更新），并提示需要推送到服务端
- * 3. 服务端为空 + 本地有数据 -> 用本地副本，交给界面询问是否导入（绝不静默覆盖）
- * 4. 其他            -> 用服务端数据
+ * 同步策略（磁盘/服务端为唯一真源，localStorage 只做离线副本）：
+ * 1. 读取失败          -> 用本地副本，标记 offline
+ * 2. 本地有待同步改动   -> 用本地副本（它更新），并提示需要写回
+ * 3. 真源为空 + 本地有数据 -> 用本地副本，交给界面询问是否导入（绝不静默覆盖）
+ * 4. 其他              -> 用真源数据
+ *
+ * 桌面端读本地文件（IPC），网页版读 /api，两者返回同样的结构。
  */
 export async function loadNotes() {
+    await ensureUserId();
     const local = readLocalNotes();
     const pending = hasPendingChanges();
+
+    if (isDesktopApp) {
+        const result = await desktopBridge.readNotes(userId);
+        if (!result || result.ok !== true) {
+            console.warn('[RFNOTER] 读取本地笔记文件失败，改用 localStorage 副本', result?.error);
+            return { notes: local, source: 'local', offline: true, pending, error: result?.error };
+        }
+        const fileNotes = Array.isArray(result.notes) ? result.notes : [];
+        if (fileNotes.length === 0 && local.length > 0) {
+            return {
+                notes: local,
+                source: 'local',
+                offline: false,
+                pending: false,
+                needImportConfirm: true,
+                localCount: local.length
+            };
+        }
+        return { notes: fileNotes, source: 'filesystem', offline: false, pending: false };
+    }
 
     let serverNotes;
     try {
@@ -151,11 +210,29 @@ export async function loadNotes() {
 }
 
 /**
- * 保存笔记。本地先落盘（保证任何情况下都不丢），再尝试同步到服务端。
+ * 保存笔记。先写 localStorage（保证任何情况下都不丢），再写入真源：
+ * 桌面端写本地文件，网页版 POST 到服务端。
  * @returns {Promise<{ok: boolean, error?: string}>}
  */
 export async function saveNotesToServer(notes) {
+    await ensureUserId();
     writeLocalNotes(notes);
+
+    if (isDesktopApp) {
+        try {
+            const result = await desktopBridge.writeNotes(userId, notes);
+            if (!result || result.ok !== true) {
+                throw new Error(result?.error || '写入本地文件失败');
+            }
+            setPending(false);
+            return { ok: true };
+        } catch (e) {
+            console.warn('[RFNOTER] 写入本地文件失败，已保留 localStorage 副本', e);
+            setPending(true);
+            return { ok: false, error: e.message };
+        }
+    }
+
     try {
         const res = await fetch(`${API_BASE}/notes/${userId}`, {
             method: 'POST',
