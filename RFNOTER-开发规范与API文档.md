@@ -29,7 +29,7 @@
 | 属性 | 值 |
 |------|-----|
 | 项目名称 | RFNOTER（应用内显示名：闪录） |
-| 当前版本 | v2.4.0 |
+| 当前版本 | v2.5.0 |
 | 架构形式 | 模块化前端 + **双运行形态**：Electron 桌面端（默认）/ Express 网页端，共用同一套 `public/` |
 | 技术栈 | HTML5 + Tailwind CSS v3（本地 vendor）+ Font Awesome 4.7（本地 vendor）+ ES6 Modules + Electron 44 / Express 4 |
 | 数据存储 | 桌面端：`%APPDATA%\RFNOTER\data\`；网页端：`data/` 目录；两者都以 localStorage 作为离线副本 |
@@ -56,6 +56,9 @@
 - **v2.4.0**：导出格式、时间微调、错误日志与 CI（见 §11.9）
   - `public/js/exporters.js`（纯函数）、`electron/logger.js`（滚动文件日志）
   - `.github/workflows/ci.yml`：Node 20/24 矩阵 + 桌面自检 + tag 打包
+- **v2.5.0**：搜索、批量编辑与模块拆分（见 §11.10）
+  - `app.js` 拆出 config / state / render / note-ops / search 五个模块
+  - 区间选择、全选、批量改标签与批量删除
 
 ---
 
@@ -1026,7 +1029,27 @@ tailwind.config = {
 2. jsdom 测试环境必须注入 `globalThis.Event = window.Event`：app.js 里的 `new Event(...)` 否则拿到的是 Node 的 `Event`，jsdom 的 `dispatchEvent` 会拒绝（`parameter 1 is not of type 'Event'`）。
 3. 桌面端测试的假数据日期要用「今天」：非今天的分组默认折叠、卡片是惰性渲染的，断言 `.note-card` 数量会得到 0。
 
-### 11.10 扩展预留接口
+### 11.10 v2.5.0 主要变更（搜索、批量编辑、模块拆分）
+
+先是把 `app.js` 拆开（1747 → 1522 行，但新增了三个纯逻辑模块），再在干净的地基上加功能。
+
+| 变更 | 说明 |
+|------|------|
+| **模块拆分** | 新增 `config.js`（常量）、`state.js`（会话状态 + setter + `resetState()`）、`render.js`（列表渲染）、`note-ops.js`（批量操作纯函数）、`search.js`（搜索纯函数） |
+| **状态为什么用 setter** | 测试用 `?boot=随机数` 重载 app.js，但静态导入的模块是共享实例。状态导出成 `let` 绑定（ESM live binding，读起来和普通变量一样），但 import 进来的绑定**只读**，所以 17 处"整体替换"改成 setter；原地修改（`push`/`add`/`clear`）不受影响。app.js 每次启动先 `resetState()` |
+| **渲染为什么用 init 注入** | 同理：render.js 不在导入时抓 DOM，而由 `initRender({ notesContainer, emptyState })` 每次注入；需要调用业务侧的地方走 `setRenderHooks({...})`，依赖方向固定为「渲染 ← 业务」 |
+| **搜索** | `search.js` 提供 `parseQuery` / `matchNote` / `filterNotes` / `highlightHtml` / `resultLabel`。多词是"与"关系；`matchNote` 返回 `onlyInDetails` 让界面能标注"（详情中匹配）" |
+| **高亮的安全性** | `highlightHtml` 自己统一转义，只有它生成的 `<mark>` 是"生"的；笔记内容里的尖括号不可能变成标签（有专门的注入用例） |
+| **区间选择** | 按"界面顺序"（日期倒序 + 同日 createdAt 倒序）算，而不是按 `notes` 数组顺序——折叠分组不渲染卡片，按数组下标算会选错 |
+| **`onRendered` 钩子** | 渲染完成后通知业务侧刷新搜索结果条数，这样新记/删除/导入后数字会自动跟上，而渲染模块不需要认识那个 DOM 元素 |
+
+**踩到的坑（勿回退）**：
+
+1. `saveNotes()` 是异步的、自己会写"已保存"，所以批量操作里紧跟其后的自定义提示会被覆盖。要先 `await saveNotes()` 再提示（与 `importNotes` 的写法一致）。
+2. Tailwind 工具类和自定义 `.input-field` 都在 utilities 层，层内顺序不可靠：`pl-8` 会被 `.input-field` 的 `px-3` 覆盖。需要覆盖内边距时用内联样式。
+3. 惰性渲染让"按 DOM 反推数据"的写法全部失效（分组计数、整组选择的 id 收集、日期标题的折叠回调），这些地方必须以 `notes` 为准；搜索时还要额外把所有分组展开。
+
+### 11.11 扩展预留接口
 
 | 预留点 | 说明 |
 |--------|------|
@@ -1038,5 +1061,5 @@ tailwind.config = {
 
 ---
 
-> 📄 本文档版本：v2.4.0
+> 📄 本文档版本：v2.5.0
 > 最后更新：2026-10-06
