@@ -254,12 +254,20 @@ function createWindow() {
 
         // --screenshot=<path>：让 Electron 自己截自己的窗口，避免外部截图工具
         // 在 DPI 缩放下坐标错位（150% 缩放时 GetWindowRect/CopyFromScreen 会互相错开）
+        // 附加 --stats 可以先打开统计面板再截，方便检查那个全屏面板的排版
         const shotArg = process.argv.find((arg) => arg.startsWith('--screenshot='));
         if (shotArg) {
             const target = shotArg.slice('--screenshot='.length);
+            const openStatsFirst = process.argv.includes('--stats');
             mainWindow.webContents.once('did-finish-load', async () => {
                 await wait(2500);
                 try {
+                    if (openStatsFirst) {
+                        await mainWindow.webContents.executeJavaScript(
+                            "document.getElementById('stats-btn')?.click()"
+                        );
+                        await wait(1200);
+                    }
                     const image = await mainWindow.webContents.capturePage();
                     fs.writeFileSync(target, image.toPNG());
                     console.log(`[RFNOTER] screenshot saved: ${target} ${image.getSize().width}x${image.getSize().height}`);
@@ -499,6 +507,36 @@ async function runSelfTest() {
 
     // 任务栏/窗口标题显示的就是它
     check('窗口标题为「闪录」', win.getTitle() === '闪录', win.getTitle());
+
+    // 统计面板：打开后四大块都要渲染出来，而且不能报错
+    const statsProbe = await win.webContents.executeJavaScript(`(async () => {
+        document.getElementById('stats-btn')?.click();
+        await new Promise((resolve) => setTimeout(resolve, 400));
+        const content = document.getElementById('stats-content');
+        const text = content ? content.textContent : '';
+        const result = {
+            open: !document.getElementById('stats-modal')?.classList.contains('hidden'),
+            ranking: text.includes('时长排行'),
+            timeline: text.includes('一天时间轴'),
+            hourly: text.includes('作息分布'),
+            heatmap: text.includes('记录密度'),
+            controls: content ? content.querySelectorAll('[data-stats-action]').length : 0,
+            blocks: content ? content.querySelectorAll('[title]').length : 0
+        };
+        document.getElementById('stats-btn')?.click();
+        return result;
+    })()`);
+    check(
+        '统计面板能打开并渲染四大块',
+        statsProbe.open && statsProbe.ranking && statsProbe.timeline
+            && statsProbe.hourly && statsProbe.heatmap,
+        JSON.stringify(statsProbe)
+    );
+    check(
+        '统计面板的图表与控件都画出来了',
+        statsProbe.controls >= 8 && statsProbe.blocks > 0,
+        `控件 ${statsProbe.controls} / 带提示的元素 ${statsProbe.blocks}`
+    );
 
     // v2.3.0 新增的三块：常用条目容器、接续提示、惰性渲染
     const quick = await win.webContents.executeJavaScript(`(() => {

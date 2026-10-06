@@ -948,3 +948,92 @@ test('A3 搜索：只在详情里命中时会标注出来', async () => {
     assert.equal(document.querySelectorAll('.note-card').length, 1);
     assert.match(document.querySelector('.note-card').textContent, /（详情中匹配）/);
 });
+
+/* ---------------- v2.6.0：统计 ---------------- */
+
+/** 打开统计面板并切到"今天"，保证只统计这个用例造的数据。 */
+async function openStatsToday(document, window) {
+    document.getElementById('stats-btn').dispatchEvent(new window.Event('click', { bubbles: true }));
+    await flush(30);
+    document.querySelector('[data-stats-action="range"][data-range="today"]')
+        .dispatchEvent(new window.Event('click', { bubbles: true }));
+    await flush(30);
+}
+
+/** 取排行里某一行的文本。 */
+function rankingRow(document, label) {
+    return [...document.querySelectorAll('[data-stats-row]')]
+        .find((row) => row.dataset.label === label);
+}
+
+test('A1 统计：面板能打开，四大块都渲染，概览数字正确', async () => {
+    const notes = [
+        makeNote({ id: 'n1', content: '吃饭+B站', timeStart: '10:00', timeEnd: '11:00', createdAt: 2 }),
+        makeNote({ id: 'n2', content: 'CS', timeStart: '12:00', timeEnd: '12:30', createdAt: 1 })
+    ];
+    const { document, window } = await bootApp({ serverNotes: notes });
+    assert.ok(document.getElementById('stats-modal').classList.contains('hidden'), '默认是收起的');
+
+    await openStatsToday(document, window);
+
+    assert.equal(document.getElementById('stats-modal').classList.contains('hidden'), false);
+    const text = document.getElementById('stats-content').textContent;
+    for (const section of ['时长排行', '一天时间轴', '作息分布', '记录密度']) {
+        assert.ok(text.includes(section), `缺少「${section}」`);
+    }
+    assert.match(text, /2 条/, '概览应显示 2 条');
+    assert.match(text, /1小时30分钟/, '两条合计 90 分钟');
+});
+
+test('A1 统计：切换口径会改变排行——均摊 30 分钟，全额 60 分钟', async () => {
+    const notes = [makeNote({ id: 'n1', content: '吃饭+B站', timeStart: '10:00', timeEnd: '11:00' })];
+    const { document, window } = await bootApp({ serverNotes: notes });
+    await openStatsToday(document, window);
+
+    // 默认多段均摊：60 分钟按两段各 30
+    assert.match(rankingRow(document, '吃饭').textContent, /30分钟/);
+    assert.match(rankingRow(document, 'b站').textContent, /30分钟/);
+
+    document.querySelector('[data-stats-action="allocation"][data-allocation="full"]')
+        .dispatchEvent(new window.Event('click', { bubbles: true }));
+    await flush(30);
+
+    // 各计全额：两段都记 60
+    assert.match(rankingRow(document, '吃饭').textContent, /1小时/);
+    assert.match(rankingRow(document, 'b站').textContent, /1小时/);
+});
+
+test('A1 统计：归并的簇会标注写法数量，展开后能看到明细', async () => {
+    const notes = [
+        makeNote({ id: 'n1', content: '30图小河道表水', timeStart: '09:00', timeEnd: '10:00', createdAt: 3 }),
+        makeNote({ id: 'n2', content: '30图小河道', timeStart: '11:00', timeEnd: '11:30', createdAt: 2 }),
+        makeNote({ id: 'n3', content: '完全无关的事', timeStart: '13:00', timeEnd: '13:10', createdAt: 1 })
+    ];
+    const { document, window } = await bootApp({ serverNotes: notes });
+    await openStatsToday(document, window);
+
+    const row = rankingRow(document, '30图小河道表水');
+    assert.ok(row, '组名应该是时长最高的那个写法');
+    assert.match(row.textContent, /含 2 种写法/);
+    assert.match(row.textContent, /1小时30分钟/, '合并后 60 + 30 = 90 分钟');
+
+    const toggle = row.querySelector('[data-stats-action="toggle-members"]');
+    toggle.dispatchEvent(new window.Event('click', { bubbles: true }));
+    await flush(30);
+
+    const expanded = rankingRow(document, '30图小河道表水');
+    assert.match(expanded.textContent, /30图小河道(?!表水)/, '展开后应看到另一个写法');
+    assert.match(expanded.textContent, /收起/);
+});
+
+test('A1 统计：关掉面板不会动到笔记数据', async () => {
+    const notes = [makeNote({ id: 'n1', timeStart: '10:00', timeEnd: '11:00' })];
+    const { document, window, state } = await bootApp({ serverNotes: notes });
+    await openStatsToday(document, window);
+
+    document.getElementById('close-stats-btn').dispatchEvent(new window.Event('click', { bubbles: true }));
+    await flush(20);
+    assert.equal(document.getElementById('stats-modal').classList.contains('hidden'), true);
+    assert.equal(state.serverNotes.length, 1);
+    assert.equal(state.postCount, 0, '看统计不该触发任何保存');
+});

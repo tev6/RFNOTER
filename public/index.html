@@ -166,6 +166,9 @@
             <div class="flex items-center space-x-4">
                 <span id="search-status" class="hidden text-xs text-gray-500 whitespace-nowrap"></span>
                 <span id="sync-status" class="hidden"></span>
+                <button id="stats-btn" class="btn btn-secondary text-sm transition-all duration-150" title="看看时间都花在哪了">
+                    <i class="fa fa-bar-chart mr-2"></i>统计
+                </button>
                 <button id="selection-toggle-btn" class="btn btn-secondary text-sm transition-all duration-150">
                     <i class="fa fa-check-square-o mr-2"></i>选择笔记
                 </button>
@@ -502,6 +505,21 @@
                     <button type="button" id="save-note-btn" class="btn btn-primary transition-all duration-150">保存</button>
                     <button type="button" id="cancel-note-btn" class="btn btn-secondary ml-3 transition-all duration-150">取消</button>
                 </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 统计面板：内容由 stats-view.js 渲染 -->
+    <div id="stats-modal" class="fixed inset-0 z-50 hidden overflow-y-auto bg-gray-900/50">
+        <div class="container mx-auto px-4 py-6">
+            <div class="bg-white rounded-lg shadow-xl">
+                <div class="flex items-center justify-between px-6 py-4 border-b border-gray-200">
+                    <h2 class="text-lg font-medium text-gray-900">统计</h2>
+                    <button id="close-stats-btn" class="text-gray-500 hover:text-gray-700 transition-colors duration-150" title="关闭（Esc）">
+                        <i class="fa fa-times"></i>
+                    </button>
+                </div>
+                <div id="stats-content" class="px-6 py-5"></div>
             </div>
         </div>
     </div>

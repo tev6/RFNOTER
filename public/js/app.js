@@ -12,6 +12,11 @@ import {
 import { notesToJson, notesToMarkdown, notesToCsv, exportFilename, mimeFor } from './exporters.js';
 import { rangeIds, sortForDisplay, batchApplyTag, batchRemove, collectTags, TAG_OP } from './note-ops.js';
 import { parseQuery, matchNote, resultLabel } from './search.js';
+import {
+    filterByRange, rankActivities, hourHistogram, dailyBuckets,
+    timelineBlocks, overview, heatmapDays, ALLOCATION
+} from './stats.js';
+import { renderStats } from './stats-view.js';
 import { CONFIG, STORE_LABEL, SAFE_ID_RE } from './config.js';
 import {
     initRender, setRenderHooks, renderNotes, renderNoteElement,
@@ -81,6 +86,16 @@ const applyBatchTagBtn = document.getElementById('apply-batch-tag-btn');
 const searchInput = document.getElementById('search-input');
 const searchClearBtn = document.getElementById('search-clear-btn');
 const searchStatus = document.getElementById('search-status');
+const statsBtn = document.getElementById('stats-btn');
+const statsModal = document.getElementById('stats-modal');
+const statsContent = document.getElementById('stats-content');
+const closeStatsBtn = document.getElementById('close-stats-btn');
+
+/**
+ * 统计面板的界面状态（范围、口径、展开了哪些明细、时间轴看哪天）。
+ * 这些是纯界面选择，不进笔记数据。
+ */
+let statsState = { range: 'month', allocation: ALLOCATION.SPLIT, expanded: new Set(), timelineDate: null };
 
 document.addEventListener('DOMContentLoaded', async () => {
     // 每次启动先把会话状态归零：测试会用 ?boot=随机数 反复重载本模块，
@@ -683,6 +698,89 @@ function initSearch() {
     if (searchClearBtn) searchClearBtn.addEventListener('click', clearSearch);
 }
 
+/* ------------------------------------------------------------------ */
+/* 统计                                                                */
+/* ------------------------------------------------------------------ */
+
+function openStats() {
+    if (!statsModal) return;
+    statsState = { range: 'month', allocation: statsState.allocation, expanded: new Set(), timelineDate: null };
+    renderStatsPanel();
+    statsModal.classList.remove('hidden');
+}
+
+function closeStats() {
+    if (statsModal) statsModal.classList.add('hidden');
+}
+
+/** 面板里当前该显示的日期列表（有记录的那些天，升序）。 */
+function statsDates() {
+    return [...dailyBuckets(filterByRange(notes, statsState.range)).keys()].sort();
+}
+
+function renderStatsPanel() {
+    if (!statsContent) return;
+    const scoped = filterByRange(notes, statsState.range);
+    const dates = statsDates();
+    // 时间轴默认落在范围内最近有记录的那天；换范围后要重新定位
+    if (!statsState.timelineDate || !dates.includes(statsState.timelineDate)) {
+        statsState.timelineDate = dates[dates.length - 1] || null;
+    }
+    renderStats(statsContent, {
+        range: statsState.range,
+        allocation: statsState.allocation,
+        expanded: statsState.expanded,
+        overview: overview(scoped),
+        ranked: rankActivities(scoped, { allocation: statsState.allocation, limit: 40 }),
+        hourly: hourHistogram(scoped),
+        // 热力图刻意不受范围影响：它就是用来看"这一年记了多少"的
+        heatmap: heatmapDays(notes, { days: 365 }),
+        timelineDate: statsState.timelineDate,
+        timeline: statsState.timelineDate ? timelineBlocks(notes, statsState.timelineDate) : []
+    });
+}
+
+/** 面板里的交互统一用事件委托：面板内容是整块重绘的，逐个绑定会漏。 */
+function handleStatsClick(event) {
+    const trigger = event.target.closest('[data-stats-action]');
+    if (!trigger) return;
+    const action = trigger.dataset.statsAction;
+
+    if (action === 'range') {
+        statsState.range = trigger.dataset.range;
+        statsState.expanded.clear();
+        statsState.timelineDate = null;
+    } else if (action === 'allocation') {
+        statsState.allocation = trigger.dataset.allocation;
+        statsState.expanded.clear();
+    } else if (action === 'toggle-members') {
+        const index = Number(trigger.dataset.index);
+        if (statsState.expanded.has(index)) statsState.expanded.delete(index);
+        else statsState.expanded.add(index);
+    } else if (action === 'day-prev' || action === 'day-next') {
+        const dates = statsDates();
+        const current = dates.indexOf(statsState.timelineDate);
+        const next = action === 'day-prev' ? current - 1 : current + 1;
+        if (next < 0 || next >= dates.length) return;   // 到头了就不动
+        statsState.timelineDate = dates[next];
+    } else {
+        return;
+    }
+    renderStatsPanel();
+}
+
+function initStats() {
+    if (statsBtn) statsBtn.addEventListener('click', openStats);
+    if (closeStatsBtn) closeStatsBtn.addEventListener('click', closeStats);
+    if (statsContent) statsContent.addEventListener('click', handleStatsClick);
+    if (statsModal) {
+        statsModal.addEventListener('click', (event) => {
+            // 点面板外的遮罩关闭；点面板内部不关
+            if (event.target === statsModal) closeStats();
+        });
+    }
+}
+
 /** 绑定导出 / 导入按钮（v1.2.0 功能）。 */
 function initImportExport() {    if (exportBtn) exportBtn.addEventListener('click', toggleExportMenu);
     if (importBtn) importBtn.addEventListener('click', importNotes);
@@ -1217,6 +1315,7 @@ function closeHelpModal() {
 function bindEventListeners() {
     initSelectionMode();
     initSearch();
+    initStats();
     if (quickContinueBtn) quickContinueBtn.addEventListener('click', fillGapToNow);
 
     // 时间微调：按钮只服务最高频的「结束时间」，两个输入框都支持 Alt+↑/↓
@@ -1291,6 +1390,7 @@ function bindEventListeners() {
         closeContextMenu();
         closeExportMenu();
         closeBatchTagModal();
+        closeStats();
         closeHelpModal();
         if (aiSummaryOpen) closeAISummaryModal();
         if (aiResultOpen) closeAIResultModal();
@@ -1299,7 +1399,7 @@ function bindEventListeners() {
 }
 
 function anyModalOpen() {
-    return [noteModal, deleteModal, helpModal, aiSummaryModal, aiResultModal, batchTagModal]
+    return [noteModal, deleteModal, helpModal, aiSummaryModal, aiResultModal, batchTagModal, statsModal]
         .some(modal => modal && !modal.classList.contains('hidden'));
 }
 
