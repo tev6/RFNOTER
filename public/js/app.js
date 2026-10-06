@@ -10,6 +10,7 @@ import {
     setApiKey, getApiKey, ApiError, REQUEST_TIMEOUT_MS, isDesktopApp
 } from './api.js';
 import { notesToJson, notesToMarkdown, notesToCsv, exportFilename, mimeFor } from './exporters.js';
+import { rangeIds, sortForDisplay, batchApplyTag, batchRemove, collectTags, TAG_OP } from './note-ops.js';
 import { CONFIG, STORE_LABEL, SAFE_ID_RE } from './config.js';
 import {
     initRender, setRenderHooks, renderNotes, renderNoteElement,
@@ -19,7 +20,7 @@ import {
     notes, currentNoteId, lastEndTime, selectedNotes,
     currentSummaryConfig, currentSummaryResult, selectionMode,
     dateGroupNotesMap, offlineMode, lastSaveFailed, summaryInFlight,
-    lazyGroupNotes, resetState,
+    lazyGroupNotes, resetState, selectionAnchorId, setSelectionAnchorId,
     setNotes, setCurrentNoteId, setLastEndTime,
     setCurrentSummaryConfig, setCurrentSummaryResult, setSelectionMode,
     setOfflineMode, setLastSaveFailed, setSummaryInFlight
@@ -65,6 +66,16 @@ const importFileInput = document.getElementById('import-file-input');
 const quickPicks = document.getElementById('quick-picks');
 const quickContinuityText = document.getElementById('quick-continuity-text');
 const quickContinueBtn = document.getElementById('quick-continue-btn');
+const selectAllBtn = document.getElementById('select-all-btn');
+const batchTagBtn = document.getElementById('batch-tag-btn');
+const batchDeleteBtn = document.getElementById('batch-delete-btn');
+const batchTagModal = document.getElementById('batch-tag-modal');
+const batchTagMode = document.getElementById('batch-tag-mode');
+const batchTagInput = document.getElementById('batch-tag-input');
+const batchTagCount = document.getElementById('batch-tag-count');
+const batchTagExisting = document.getElementById('batch-tag-existing');
+const cancelBatchTagBtn = document.getElementById('cancel-batch-tag-btn');
+const applyBatchTagBtn = document.getElementById('apply-batch-tag-btn');
 
 document.addEventListener('DOMContentLoaded', async () => {
     // 每次启动先把会话状态归零：测试会用 ?boot=随机数 反复重载本模块，
@@ -369,12 +380,123 @@ function handleNoteSelection(event, noteId) {
         if (event.detail === 2) openEditModal(noteId);
         return;
     }
+    // Shift + 点击 = 从上次点的那条一路选过来（跨日期也成立，按界面顺序算）
+    if (event.shiftKey && selectionAnchorId && selectionAnchorId !== noteId) {
+        const ids = rangeIds(notes, selectionAnchorId, noteId);
+        if (ids.length > 0) {
+            applyRangeSelection(ids);
+            return;
+        }
+    }
     if (!selectedNotes.has(noteId) && selectedNotes.size >= CONFIG.MAX_SELECTION) {
         alert(`最多只能选择${CONFIG.MAX_SELECTION}条笔记，请先取消选择一些笔记`);
         return;
     }
+    setSelectionAnchorId(noteId);
     toggleNoteSelection(noteId);
     updateAllDateGroupSelectionUI();
+}
+
+/** 把一批 id 选上（受 MAX_SELECTION 限制），用于 Shift 区间选择。 */
+function applyRangeSelection(ids) {
+    let hitLimit = false;
+    let added = 0;
+    for (const id of ids) {
+        if (selectedNotes.has(id)) continue;
+        if (selectedNotes.size >= CONFIG.MAX_SELECTION) { hitLimit = true; break; }
+        selectedNotes.add(id);
+        updateNoteSelectionUI(id, true);
+        added += 1;
+    }
+    updateAllDateGroupSelectionUI();
+    updateSelectionUI();
+    if (hitLimit) {
+        showSaveIndicator(`一次最多 ${CONFIG.MAX_SELECTION} 条，本次选中了 ${added} 条`, { failed: true });
+    } else if (added > 0) {
+        showSaveIndicator(`已选中区间内 ${added} 条`);
+    }
+}
+
+/** 全选：按界面顺序（时间从新到旧）取，最多 MAX_SELECTION 条。 */
+function selectAllNotes() {
+    if (notes.length === 0) return;
+    selectedNotes.clear();
+    const ordered = sortForDisplay(notes).slice(0, CONFIG.MAX_SELECTION);
+    for (const note of ordered) {
+        selectedNotes.add(note.id);
+    }
+    setSelectionAnchorId(ordered[0]?.id ?? null);
+    // 折叠分组里的卡片可能没渲染，统一走"先清后刷"避免漏掉
+    refreshAllSelectionUI();
+    if (notes.length > CONFIG.MAX_SELECTION) {
+        showSaveIndicator(`已选中最近 ${CONFIG.MAX_SELECTION} 条（共 ${notes.length} 条）`);
+    }
+}
+
+/** 按当前 selectedNotes 全量刷新界面上的勾选态（含未渲染的折叠分组）。 */
+function refreshAllSelectionUI() {
+    document.querySelectorAll('.note-card[data-note-id]').forEach((element) => {
+        element.classList.toggle('selected', selectedNotes.has(element.dataset.noteId));
+    });
+    updateAllDateGroupSelectionUI();
+    updateSelectionUI();
+}
+
+/* ------------------------------------------------------------------ */
+/* 批量编辑                                                            */
+/* ------------------------------------------------------------------ */
+
+function openBatchTagModal() {
+    if (selectedNotes.size === 0) return;
+    batchTagCount.textContent = selectedNotes.size;
+    batchTagInput.value = '';
+    batchTagMode.value = TAG_OP.ADD;
+    // "移除"时得知道能填什么，所以把现有标签列出来
+    const existing = collectTags(notes, [...selectedNotes]).slice(0, 8);
+    batchTagExisting.textContent = existing.length
+        ? `这批笔记现有标签：${existing.map((item) => `${item.tag}(${item.count})`).join('、')}`
+        : '这批笔记目前都没有标签';
+    batchTagModal.classList.remove('hidden');
+    batchTagInput.focus();
+}
+
+function closeBatchTagModal() {
+    if (batchTagModal) batchTagModal.classList.add('hidden');
+}
+
+async function applyBatchTag() {
+    if (selectedNotes.size === 0) {
+        closeBatchTagModal();
+        return;
+    }
+    const mode = batchTagMode.value;
+    const tag = batchTagInput.value;
+    if (mode === TAG_OP.ADD && !tag.trim()) {
+        alert('请填写要添加的标签');
+        return;
+    }
+    const { notes: next, changed } = batchApplyTag(notes, [...selectedNotes], { mode, tag });
+    setNotes(next);
+    renderNotes();
+    closeBatchTagModal();
+    // 先等保存结束再提示：saveNotes 自己也会写"已保存"，不等它就会被覆盖掉
+    await saveNotes();
+    showSaveIndicator(changed > 0 ? `已更新 ${changed} 条笔记的标签` : '没有笔记需要改动');
+}
+
+async function batchDeleteSelected() {
+    const count = selectedNotes.size;
+    if (count === 0) return;
+    if (!confirm(`确定删除选中的 ${count} 条笔记吗？删除后无法撤销。`)) return;
+    const { notes: next, removed } = batchRemove(notes, [...selectedNotes]);
+    setNotes(next);
+    clearSelection();
+    exitSelectionMode();
+    renderNotes();
+    renderQuickPicks();
+    updateQuickContinuity();
+    await saveNotes();
+    showSaveIndicator(`已删除 ${removed} 条笔记`);
 }
 
 function toggleNoteSelection(noteId) {
@@ -497,6 +619,17 @@ function initSelectionMode() {
     if (closeSelectionHintBtn) {
         // 提示条是"选择模式已开启"的横幅，关掉它 = 退出选择模式
         closeSelectionHintBtn.addEventListener('click', () => exitSelectionMode());
+    }
+    // 批量操作入口和选择状态在同一行，选中 0 条时整行是隐藏的
+    if (selectAllBtn) selectAllBtn.addEventListener('click', selectAllNotes);
+    if (batchTagBtn) batchTagBtn.addEventListener('click', openBatchTagModal);
+    if (batchDeleteBtn) batchDeleteBtn.addEventListener('click', batchDeleteSelected);
+    if (cancelBatchTagBtn) cancelBatchTagBtn.addEventListener('click', closeBatchTagModal);
+    if (applyBatchTagBtn) applyBatchTagBtn.addEventListener('click', applyBatchTag);
+    if (batchTagModal) {
+        batchTagModal.addEventListener('click', (event) => {
+            if (event.target === batchTagModal) closeBatchTagModal();
+        });
     }
 }
 
@@ -717,6 +850,7 @@ function enterSelectionMode() {
 
 function exitSelectionMode() {
     setSelectionMode(false);
+    setSelectionAnchorId(null);
     selectionToggleBtn.innerHTML = '<i class="fa fa-check-square-o mr-2"></i>选择笔记';
     selectionToggleBtn.classList.remove('btn-ai');
     selectionToggleBtn.classList.add('btn-secondary');
@@ -1106,6 +1240,7 @@ function bindEventListeners() {
         closeDeleteModal();
         closeContextMenu();
         closeExportMenu();
+        closeBatchTagModal();
         closeHelpModal();
         if (aiSummaryOpen) closeAISummaryModal();
         if (aiResultOpen) closeAIResultModal();
@@ -1114,7 +1249,7 @@ function bindEventListeners() {
 }
 
 function anyModalOpen() {
-    return [noteModal, deleteModal, helpModal, aiSummaryModal, aiResultModal]
+    return [noteModal, deleteModal, helpModal, aiSummaryModal, aiResultModal, batchTagModal]
         .some(modal => modal && !modal.classList.contains('hidden'));
 }
 

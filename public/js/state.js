@@ -33,6 +33,12 @@ export let currentSummaryResult = null;
 /** 是否处于选择模式。 */
 export let selectionMode = false;
 
+/**
+ * 区间选择的锚点：Shift+点击 时，从这里选到被点的那条。
+ * 存 id 而不是索引，因为笔记随时可能被增删。
+ */
+export let selectionAnchorId = null;
+
 /** 日期分组 -> 该组的笔记 id（选择模式整组勾选时用）。 */
 export let dateGroupNotesMap = new Map();
 
@@ -62,6 +68,7 @@ export function setLastEndTime(timestamp) { lastEndTime = timestamp; }
 export function setCurrentSummaryConfig(config) { currentSummaryConfig = config; }
 export function setCurrentSummaryResult(result) { currentSummaryResult = result; }
 export function setSelectionMode(value) { selectionMode = value === true; }
+export function setSelectionAnchorId(id) { selectionAnchorId = id ?? null; }
 export function setOfflineMode(value) { offlineMode = value === true; }
 export function setLastSaveFailed(value) { lastSaveFailed = value === true; }
 export function setSummaryInFlight(value) { summaryInFlight = value === true; }
@@ -78,6 +85,7 @@ export function resetState() {
     currentSummaryConfig = {};
     currentSummaryResult = null;
     selectionMode = false;
+    selectionAnchorId = null;
     dateGroupNotesMap.clear();
     offlineMode = false;
     lastSaveFailed = false;

@@ -709,3 +709,168 @@ test('时间微调：「现在」把结束时间设为当前时刻（向上取�
         globalThis.Date = RealDate;
     }
 });
+
+/* ---------------- v2.5.0：选择模式增强与批量编辑 ---------------- */
+
+/** 进入选择模式，返回一个"点某条卡片"的小工具。 */
+async function enterSelection(document, window) {
+    document.getElementById('selection-toggle-btn')
+        .dispatchEvent(new window.Event('click', { bubbles: true }));
+    await flush(20);
+    const clickCard = (noteId, options = {}) => {
+        const card = document.querySelector(`.note-card[data-note-id="${noteId}"]`);
+        assert.ok(card, `找不到卡片 ${noteId}`);
+        card.dispatchEvent(new window.MouseEvent('click', { bubbles: true, ...options }));
+    };
+    return { clickCard };
+}
+
+test('A7 区间选择：Shift + 点击选中两次点击之间的全部笔记', async () => {
+    const notes = [
+        makeNote({ id: 'n1', createdAt: 5 }),
+        makeNote({ id: 'n2', createdAt: 4 }),
+        makeNote({ id: 'n3', createdAt: 3 }),
+        makeNote({ id: 'n4', createdAt: 2 })
+    ];
+    const { document, window } = await bootApp({ serverNotes: notes });
+    const { clickCard } = await enterSelection(document, window);
+
+    clickCard('n1');                    // 锚点
+    await flush(20);
+    clickCard('n4', { shiftKey: true }); // 选到这一段
+    await flush(20);
+
+    assert.equal(document.querySelectorAll('.note-card.selected').length, 4,
+        'n1 到 n4 应该全被选中');
+    assert.match(document.getElementById('selected-count').textContent, /已选中 4 条/);
+});
+
+test('A7 区间选择：跨日期也按界面顺序算', async () => {
+    const notes = [
+        makeNote({ id: 'a', date: '2026-05-14', createdAt: 3 }),
+        makeNote({ id: 'b', date: '2026-05-14', createdAt: 2 }),
+        makeNote({ id: 'c', date: '2026-05-13', createdAt: 1 })
+    ];
+    const { document, window } = await bootApp({ serverNotes: notes });
+    const { clickCard } = await enterSelection(document, window);
+
+    // 两组都不是"今天"，默认都是折叠的（惰性渲染），先都展开
+    for (const date of ['2026-05-14', '2026-05-13']) {
+        const group = [...document.querySelectorAll('.date-group')].find((g) => g.dataset.date === date);
+        group.querySelector('.date-header').dispatchEvent(new window.Event('click', { bubbles: true }));
+    }
+    await flush(30);
+
+    clickCard('a');
+    await flush(20);
+    clickCard('c', { shiftKey: true });
+    await flush(20);
+
+    assert.equal(document.querySelectorAll('.note-card.selected').length, 3);
+});
+
+test('A7 全选：按时间从新到旧选中，并受 AI 总结的 100 条上限约束', async () => {
+    const notes = [];
+    for (let i = 0; i < 105; i += 1) notes.push(makeNote({ id: `n${i}`, createdAt: i }));
+    const { document, window } = await bootApp({ serverNotes: notes });
+    await enterSelection(document, window);
+
+    document.getElementById('select-all-btn')
+        .dispatchEvent(new window.Event('click', { bubbles: true }));
+    await flush(30);
+
+    assert.match(document.getElementById('selected-count').textContent, /已选中 100 条/);
+    assert.match(document.getElementById('save-indicator').textContent, /已选中最近 100 条/);
+});
+
+test('A6 批量改标签：添加标签只影响选中的笔记', async () => {
+    const notes = [
+        makeNote({ id: 'n1', tag: '', createdAt: 3 }),
+        makeNote({ id: 'n2', tag: '', createdAt: 2 }),
+        makeNote({ id: 'n3', tag: '', createdAt: 1 })
+    ];
+    const { document, window, state } = await bootApp({ serverNotes: notes });
+    const { clickCard } = await enterSelection(document, window);
+
+    clickCard('n1');
+    await flush(20);
+    clickCard('n2');
+    await flush(20);
+    document.getElementById('batch-tag-btn').dispatchEvent(new window.Event('click', { bubbles: true }));
+    await flush(20);
+
+    const modal = document.getElementById('batch-tag-modal');
+    assert.equal(modal.classList.contains('hidden'), false, '应打开批量标签弹窗');
+    assert.equal(document.getElementById('batch-tag-count').textContent, '2');
+
+    document.getElementById('batch-tag-mode').value = 'add';
+    document.getElementById('batch-tag-input').value = '户外';
+    document.getElementById('apply-batch-tag-btn')
+        .dispatchEvent(new window.Event('click', { bubbles: true }));
+    await flush(40);
+
+    assert.equal(modal.classList.contains('hidden'), true, '应用后应关闭弹窗');
+    const saved = state.serverNotes;
+    assert.equal(saved.find((n) => n.id === 'n1').tag, '户外');
+    assert.equal(saved.find((n) => n.id === 'n2').tag, '户外');
+    assert.equal(saved.find((n) => n.id === 'n3').tag, '', '没选中的不受影响');
+    assert.match(document.getElementById('save-indicator').textContent, /已更新 2 条/);
+});
+
+test('A6 批量改标签：替换模式会丢弃原有标签', async () => {
+    const notes = [makeNote({ id: 'n1', tag: '旧标签', createdAt: 2 }), makeNote({ id: 'n2', tag: '旧标签', createdAt: 1 })];
+    const { document, window, state } = await bootApp({ serverNotes: notes });
+    const { clickCard } = await enterSelection(document, window);
+
+    clickCard('n1');
+    await flush(20);
+    document.getElementById('batch-tag-btn').dispatchEvent(new window.Event('click', { bubbles: true }));
+    await flush(20);
+    document.getElementById('batch-tag-mode').value = 'replace';
+    document.getElementById('batch-tag-input').value = '新标签';
+    document.getElementById('apply-batch-tag-btn')
+        .dispatchEvent(new window.Event('click', { bubbles: true }));
+    await flush(40);
+
+    assert.equal(state.serverNotes.find((n) => n.id === 'n1').tag, '新标签');
+    assert.equal(state.serverNotes.find((n) => n.id === 'n2').tag, '旧标签');
+});
+
+test('A6 批量删除：删掉选中的笔记并退出选择模式', async () => {
+    const notes = [
+        makeNote({ id: 'n1', createdAt: 3 }),
+        makeNote({ id: 'n2', createdAt: 2 }),
+        makeNote({ id: 'n3', createdAt: 1 })
+    ];
+    const { document, window, state } = await bootApp({ serverNotes: notes, confirmAnswer: true });
+    const { clickCard } = await enterSelection(document, window);
+
+    clickCard('n1');
+    await flush(20);
+    clickCard('n3');
+    await flush(20);
+    document.getElementById('batch-delete-btn')
+        .dispatchEvent(new window.Event('click', { bubbles: true }));
+    await flush(60);
+
+    assert.equal(state.serverNotes.length, 1);
+    assert.equal(state.serverNotes[0].id, 'n2');
+    assert.equal(document.querySelectorAll('.note-card').length, 1);
+    assert.match(document.getElementById('save-indicator').textContent, /已删除 2 条/);
+    assert.ok(document.getElementById('selection-mode-hint').classList.contains('hidden'),
+        '批量删除后应退出选择模式');
+});
+
+test('A6 批量删除：用户取消时什么都不删', async () => {
+    const notes = [makeNote({ id: 'n1', createdAt: 2 }), makeNote({ id: 'n2', createdAt: 1 })];
+    const { document, window, state } = await bootApp({ serverNotes: notes, confirmAnswer: false });
+    const { clickCard } = await enterSelection(document, window);
+
+    clickCard('n1');
+    await flush(20);
+    document.getElementById('batch-delete-btn')
+        .dispatchEvent(new window.Event('click', { bubbles: true }));
+    await flush(40);
+
+    assert.equal(state.serverNotes.length, 2, '取消不该删任何东西');
+});
