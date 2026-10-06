@@ -14,7 +14,8 @@
 import { escapeHTML, formatDateForDisplay, formatDuration, calculateTimeDuration,
     formatRelativeTime, isTodayDate, groupNotesByDate, parseDateString } from './utils.js';
 import { CONFIG } from './config.js';
-import { notes, selectedNotes, selectionMode, lazyGroupNotes } from './state.js';
+import { notes, selectedNotes, selectionMode, lazyGroupNotes, searchTerms } from './state.js';
+import { matchNote, highlightHtml } from './search.js';
 
 /** 由 initRender 注入。 */
 let deps = {};
@@ -30,6 +31,12 @@ export function initRender(nextDeps) {
     deps = { ...deps, ...nextDeps };
 }
 
+/** 当前该显示的笔记：搜索状态下是命中的那些，否则是全部。 */
+function visibleNotes() {
+    if (!searchTerms || searchTerms.length === 0) return notes;
+    return notes.filter((note) => matchNote(note, searchTerms).matched);
+}
+
 export function renderNotes() {
     // 全量重建会把滚动位置弹回顶部；笔记一多（上千条）每次编辑都被弹走非常难受，
     // 所以重建前后自己记住并恢复。
@@ -37,9 +44,11 @@ export function renderNotes() {
     deps.notesContainer.innerHTML = '';
     updateEmptyState();
 
-    if (notes.length > 0) {
-        notes.sort((a, b) => (Number(b.createdAt) || 0) - (Number(a.createdAt) || 0));
-        const notesByDate = groupNotesByDate(notes);
+    const searching = searchTerms && searchTerms.length > 0;
+    const shown = visibleNotes();
+    if (shown.length > 0) {
+        shown.sort((a, b) => (Number(b.createdAt) || 0) - (Number(a.createdAt) || 0));
+        const notesByDate = groupNotesByDate(shown);
         Object.keys(notesByDate)
             .sort((a, b) => (parseDateString(b)?.getTime() || 0) - (parseDateString(a)?.getTime() || 0))
             .forEach(date => {
@@ -47,7 +56,8 @@ export function renderNotes() {
                 const isToday = isTodayDate(date);
                 const dateGroupElement = createDateGroupElement(date, dateNotes.length, isToday);
                 deps.notesContainer.appendChild(dateGroupElement);
-                if (isToday) {
+                // 搜索时全部展开：结果藏在折叠的日期里等于没搜到
+                if (isToday || searching) {
                     dateNotes.forEach(note => deps.notesContainer.appendChild(createNoteElement(note)));
                 } else {
                     // 折叠的分组先不建卡片：1133 条笔记时全部卡片加起来有 2.4 万个节点，
@@ -60,6 +70,7 @@ export function renderNotes() {
     }
 
     if (scrollY > 0) window.scrollTo(0, scrollY);
+    hooks.onRendered?.();
 }
 
 /** 统一处理折叠/展开的外观（class + 箭头图标）。 */
@@ -106,6 +117,9 @@ function findDateGroupElement(date) {
 
 /** 增量插入一条笔记，避免每次新增都全量重建 DOM。 */
 export function renderNoteElement(note) {
+    // 搜索状态下只画命中的：新记的笔记如果不在结果里，不该凭空出现在列表里
+    if (searchTerms && searchTerms.length > 0 && !matchNote(note, searchTerms).matched) return;
+
     let dateGroupElement = findDateGroupElement(note.date);
     const isToday = isTodayDate(note.date);
 
@@ -166,11 +180,11 @@ export function removeNoteElement(noteId, date) {
     updateDateGroupCount(dateGroup);
 }
 
-/** 刷新分组标题上的「N 条笔记」。数量以 notes 为准，因为折叠分组的卡片可能还没渲染。 */
+/** 刷新分组标题上的「N 条笔记」。数量以当前可见的笔记为准（搜索时是命中数）。 */
 function updateDateGroupCount(dateGroup) {
     if (!dateGroup) return;
     const date = dateGroup.dataset.date;
-    const count = notes.filter(n => n.date === date).length;
+    const count = visibleNotes().filter(n => n.date === date).length;
     const countSpan = dateGroup.querySelector('.note-count');
     if (countSpan) countSpan.textContent = `${count} 条笔记`;
     if (count === 0) {
@@ -219,13 +233,23 @@ function createNoteElement(note) {
     noteDiv.addEventListener('click', (e) => hooks.onNoteClick(e, note.id));
     const durationMinutes = calculateTimeDuration(note.timeStart, note.timeEnd);
     const durationText = formatDuration(durationMinutes);
+    // 搜索状态下高亮命中的片段；highlightHtml 自己负责转义，
+    // 所有来自笔记的字符都过了 escapeHTML，只有它加的 <mark> 是"生"的
+    const searching = searchTerms && searchTerms.length > 0;
+    const match = searching ? matchNote(note, searchTerms) : { matched: true, onlyInDetails: false };
+    const contentHtml = highlightHtml(note.content, searchTerms);
+    const tagHtml = highlightHtml(note.tag || '', searchTerms);
+    // 只在详情里命中的，卡片上高亮不出来，得给个交代，否则用户会觉得"这条凭什么在这"
+    const detailsHitHtml = match.onlyInDetails
+        ? '<span class="ml-2 text-xs text-amber-600 whitespace-nowrap">（详情中匹配）</span>'
+        : '';
     // 所有来自笔记数据的字段都必须转义后再拼进 innerHTML，避免笔记内容被当成 HTML 执行。
     noteDiv.innerHTML = `
         <div class="note-row-layout mb-2 items-center">
             <div class="col-span-3 md:col-span-2 lg:col-span-2 text-center text-sm font-medium text-gray-500">${escapeHTML(formatDateForDisplay(note.date))}</div>
             <div class="col-span-4 md:col-span-2 lg:col-span-2 text-center text-sm">${escapeHTML(note.timeStart)} ~ ${escapeHTML(note.timeEnd)}<span class="duration-badge">${escapeHTML(durationText)}</span></div>
-            <div class="col-span-3 md:col-span-4 lg:col-span-4 truncate text-sm font-medium">${escapeHTML(note.content)}</div>
-            <div class="col-span-1 md:col-span-2 lg:col-span-2 flex justify-center">${note.tag ? `<span class="tag">${escapeHTML(note.tag)}</span>` : ''}</div>
+            <div class="col-span-3 md:col-span-4 lg:col-span-4 truncate text-sm font-medium">${contentHtml}${detailsHitHtml}</div>
+            <div class="col-span-1 md:col-span-2 lg:col-span-2 flex justify-center">${note.tag ? `<span class="tag">${tagHtml}</span>` : ''}</div>
             <div class="col-span-1 flex justify-center">
                 <button class="text-xs text-primary hover:text-primary/80 edit-btn px-2 py-1 rounded hover:bg-primary/10 transition-all duration-150 active:scale-95">修改详情</button>
             </div>

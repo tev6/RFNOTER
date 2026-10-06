@@ -34,6 +34,12 @@ export let currentSummaryResult = null;
 export let selectionMode = false;
 
 /**
+ * 当前搜索词（已经解析成小写词数组）。空数组 = 没有在搜索。
+ * 放在状态里是为了让渲染模块直接读到，而不是每层都往下传参数。
+ */
+export let searchTerms = [];
+
+/**
  * 区间选择的锚点：Shift+点击 时，从这里选到被点的那条。
  * 存 id 而不是索引，因为笔记随时可能被增删。
  */
@@ -68,6 +74,7 @@ export function setLastEndTime(timestamp) { lastEndTime = timestamp; }
 export function setCurrentSummaryConfig(config) { currentSummaryConfig = config; }
 export function setCurrentSummaryResult(result) { currentSummaryResult = result; }
 export function setSelectionMode(value) { selectionMode = value === true; }
+export function setSearchTerms(terms) { searchTerms = Array.isArray(terms) ? terms : []; }
 export function setSelectionAnchorId(id) { selectionAnchorId = id ?? null; }
 export function setOfflineMode(value) { offlineMode = value === true; }
 export function setLastSaveFailed(value) { lastSaveFailed = value === true; }
@@ -85,6 +92,7 @@ export function resetState() {
     currentSummaryConfig = {};
     currentSummaryResult = null;
     selectionMode = false;
+    searchTerms = [];
     selectionAnchorId = null;
     dateGroupNotesMap.clear();
     offlineMode = false;

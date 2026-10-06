@@ -49,6 +49,10 @@
             .export-menu-item {
                 @apply w-full text-left px-4 py-2 text-sm text-gray-700 transition-colors duration-150 hover:bg-gray-100;
             }
+            /* 搜索命中：只用背景色，不改字号字重，免得把行高撑变 */
+            .search-hit {
+                @apply bg-amber-200 text-gray-900 rounded-sm px-0.5;
+            }
             .note-row-layout {
                 @apply grid grid-cols-12 gap-2 items-center w-full;
             }
@@ -146,7 +150,21 @@
                 </button>
                 <input type="file" id="import-file-input" accept=".json" class="hidden">
             </div>
+            <div class="flex-1 max-w-sm mx-4 relative">
+                <input type="text" id="search-input"
+                       class="input-field py-1.5 text-sm"
+                       style="padding-left: 2rem; padding-right: 2rem;"
+                       placeholder="搜索笔记（标题/标签/详情）"
+                       autocomplete="off">
+                <i class="fa fa-search absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 text-sm pointer-events-none"></i>
+                <button type="button" id="search-clear-btn"
+                        class="hidden absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 transition-colors duration-150"
+                        title="清空搜索">
+                    <i class="fa fa-times-circle"></i>
+                </button>
+            </div>
             <div class="flex items-center space-x-4">
+                <span id="search-status" class="hidden text-xs text-gray-500 whitespace-nowrap"></span>
                 <span id="sync-status" class="hidden"></span>
                 <button id="selection-toggle-btn" class="btn btn-secondary text-sm transition-all duration-150">
                     <i class="fa fa-check-square-o mr-2"></i>选择笔记

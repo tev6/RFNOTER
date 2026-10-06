@@ -11,6 +11,7 @@ import {
 } from './api.js';
 import { notesToJson, notesToMarkdown, notesToCsv, exportFilename, mimeFor } from './exporters.js';
 import { rangeIds, sortForDisplay, batchApplyTag, batchRemove, collectTags, TAG_OP } from './note-ops.js';
+import { parseQuery, matchNote, resultLabel } from './search.js';
 import { CONFIG, STORE_LABEL, SAFE_ID_RE } from './config.js';
 import {
     initRender, setRenderHooks, renderNotes, renderNoteElement,
@@ -21,6 +22,7 @@ import {
     currentSummaryConfig, currentSummaryResult, selectionMode,
     dateGroupNotesMap, offlineMode, lastSaveFailed, summaryInFlight,
     lazyGroupNotes, resetState, selectionAnchorId, setSelectionAnchorId,
+    searchTerms, setSearchTerms,
     setNotes, setCurrentNoteId, setLastEndTime,
     setCurrentSummaryConfig, setCurrentSummaryResult, setSelectionMode,
     setOfflineMode, setLastSaveFailed, setSummaryInFlight
@@ -76,6 +78,9 @@ const batchTagCount = document.getElementById('batch-tag-count');
 const batchTagExisting = document.getElementById('batch-tag-existing');
 const cancelBatchTagBtn = document.getElementById('cancel-batch-tag-btn');
 const applyBatchTagBtn = document.getElementById('apply-batch-tag-btn');
+const searchInput = document.getElementById('search-input');
+const searchClearBtn = document.getElementById('search-clear-btn');
+const searchStatus = document.getElementById('search-status');
 
 document.addEventListener('DOMContentLoaded', async () => {
     // 每次启动先把会话状态归零：测试会用 ?boot=随机数 反复重载本模块，
@@ -90,7 +95,8 @@ document.addEventListener('DOMContentLoaded', async () => {
         onDelete: openDeleteModal,
         onContextMenu: openContextMenu,
         onExpandToggled: persistViewState,
-        bindGroupSelectionEvents: bindDateGroupSelectionEvents
+        bindGroupSelectionEvents: bindDateGroupSelectionEvents,
+        onRendered: refreshSearchStatus
     });
     // 先绑定事件，再加载数据：即使数据异常，界面也不会变成一张点不动的死图。
     try {
@@ -633,9 +639,52 @@ function initSelectionMode() {
     }
 }
 
+/* ------------------------------------------------------------------ */
+/* 搜索                                                                */
+/* ------------------------------------------------------------------ */
+
+/** 输入即过滤：解析成词数组、更新状态、重画列表。 */
+function applySearch(raw) {
+    setSearchTerms(parseQuery(raw));
+    const active = searchTerms.length > 0;
+    if (searchClearBtn) searchClearBtn.classList.toggle('hidden', !active);
+    if (searchStatus) searchStatus.classList.toggle('hidden', !active);
+    renderNotes();
+}
+
+/** 结果条数要跟着数据变（新记一条、删一条、导入之后）。 */
+function refreshSearchStatus() {
+    if (!searchStatus) return;
+    if (searchTerms.length === 0) {
+        searchStatus.classList.add('hidden');
+        return;
+    }
+    const matched = notes.filter((note) => matchNote(note, searchTerms).matched).length;
+    searchStatus.textContent = resultLabel(matched, notes.length, searchTerms);
+    searchStatus.classList.remove('hidden');
+}
+
+function clearSearch() {
+    if (searchInput) searchInput.value = '';
+    applySearch('');
+    searchInput?.focus();
+}
+
+function initSearch() {
+    if (!searchInput) return;
+    searchInput.addEventListener('input', () => applySearch(searchInput.value));
+    searchInput.addEventListener('keydown', (event) => {
+        if (event.key !== 'Escape') return;
+        // 别让 Esc 顺手关掉弹窗或退出选择模式，它在这里只负责清空搜索
+        event.stopPropagation();
+        if (searchInput.value) clearSearch();
+        else searchInput.blur();
+    });
+    if (searchClearBtn) searchClearBtn.addEventListener('click', clearSearch);
+}
+
 /** 绑定导出 / 导入按钮（v1.2.0 功能）。 */
-function initImportExport() {
-    if (exportBtn) exportBtn.addEventListener('click', toggleExportMenu);
+function initImportExport() {    if (exportBtn) exportBtn.addEventListener('click', toggleExportMenu);
     if (importBtn) importBtn.addEventListener('click', importNotes);
     if (importFileInput) importFileInput.addEventListener('change', handleFileImport);
 
@@ -1167,6 +1216,7 @@ function closeHelpModal() {
 
 function bindEventListeners() {
     initSelectionMode();
+    initSearch();
     if (quickContinueBtn) quickContinueBtn.addEventListener('click', fillGapToNow);
 
     // 时间微调：按钮只服务最高频的「结束时间」，两个输入框都支持 Alt+↑/↓

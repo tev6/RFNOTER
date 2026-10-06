@@ -874,3 +874,77 @@ test('A6 批量删除：用户取消时什么都不删', async () => {
 
     assert.equal(state.serverNotes.length, 2, '取消不该删任何东西');
 });
+
+/* ---------------- v2.5.0：搜索 ---------------- */
+
+test('A3 搜索：输入即过滤，命中项加高亮，其余从列表消失', async () => {
+    const notes = [
+        makeNote({ id: 'n1', content: '30图小河道表水', createdAt: 3 }),
+        makeNote({ id: 'n2', content: 'CS', createdAt: 2 }),
+        makeNote({ id: 'n3', content: '30图拖钓', createdAt: 1 })
+    ];
+    const { document, window } = await bootApp({ serverNotes: notes });
+
+    const input = document.getElementById('search-input');
+    input.value = '30图';
+    input.dispatchEvent(new window.Event('input', { bubbles: true }));
+    await flush(30);
+
+    const cards = [...document.querySelectorAll('.note-card')];
+    assert.equal(cards.length, 2, '只应剩两条命中的');
+    assert.ok(cards.every((c) => c.textContent.includes('30图')));
+    assert.equal(document.querySelectorAll('mark.search-hit').length, 2, '命中片段要有高亮');
+    assert.match(document.getElementById('search-status').textContent, /找到 2 条 \/ 共 3 条/);
+    assert.equal(document.getElementById('search-clear-btn').classList.contains('hidden'), false);
+});
+
+test('A3 搜索：清空后恢复全部，且过滤状态不改变数据', async () => {
+    const notes = [makeNote({ id: 'n1', content: '钓鱼', createdAt: 2 }), makeNote({ id: 'n2', content: 'CS', createdAt: 1 })];
+    const { document, window, state } = await bootApp({ serverNotes: notes });
+
+    const input = document.getElementById('search-input');
+    input.value = '钓鱼';
+    input.dispatchEvent(new window.Event('input', { bubbles: true }));
+    await flush(30);
+    assert.equal(document.querySelectorAll('.note-card').length, 1);
+
+    document.getElementById('search-clear-btn').dispatchEvent(new window.Event('click', { bubbles: true }));
+    await flush(30);
+
+    assert.equal(document.querySelectorAll('.note-card').length, 2, '清空后应恢复');
+    assert.equal(input.value, '');
+    assert.equal(document.getElementById('search-status').classList.contains('hidden'), true);
+    assert.equal(state.serverNotes.length, 2, '搜索不应改动数据');
+});
+
+test('A3 搜索：结果藏在折叠日期里也会自动展开', async () => {
+    const notes = [
+        makeNote({ id: 'today', content: '今天的' }),
+        makeNote({ id: 'old1', date: '2026-05-13', content: '旧笔记 钓鱼' }),
+        makeNote({ id: 'old2', date: '2026-05-12', content: '旧笔记 别的事' })
+    ];
+    const { document, window } = await bootApp({ serverNotes: notes });
+    assert.equal(document.querySelectorAll('.note-card').length, 1, '平时只有今天那一组渲染');
+
+    const input = document.getElementById('search-input');
+    input.value = '钓鱼';
+    input.dispatchEvent(new window.Event('input', { bubbles: true }));
+    await flush(30);
+
+    const card = document.querySelector('.note-card[data-note-id="old1"]');
+    assert.ok(card, '折叠日期里的命中项也应该显示出来');
+    assert.equal(card.classList.contains('hidden'), false);
+});
+
+test('A3 搜索：只在详情里命中时会标注出来', async () => {
+    const notes = [makeNote({ id: 'n1', content: 'CS', details: '后半段换成了别的图', createdAt: 1 })];
+    const { document, window } = await bootApp({ serverNotes: notes });
+
+    const input = document.getElementById('search-input');
+    input.value = '别的图';
+    input.dispatchEvent(new window.Event('input', { bubbles: true }));
+    await flush(30);
+
+    assert.equal(document.querySelectorAll('.note-card').length, 1);
+    assert.match(document.querySelector('.note-card').textContent, /（详情中匹配）/);
+});
