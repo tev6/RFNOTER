@@ -465,3 +465,132 @@ test('回归：界面上显示的是「闪录」与自己的图标，不是旧�
     assert.ok(logo, '左上角应该是图片 LOGO');
     assert.match(logo.getAttribute('src'), /icon\.png/);
 });
+
+/* ---------------- v2.3.0：高频录入闭环 + 渲染可扩展性 ---------------- */
+
+test('常用条目：按使用频率排序，只出现过一次的不入选，点一下填入标题', async () => {
+    const notes = [];
+    for (let i = 0; i < 5; i += 1) notes.push(makeNote({ id: `cs-${i}`, content: 'CS', createdAt: i }));
+    for (let i = 0; i < 2; i += 1) notes.push(makeNote({ id: `bili-${i}`, content: 'B站', createdAt: 100 + i }));
+    notes.push(makeNote({ id: 'once', content: '只出现过一次', createdAt: 500 }));
+    const { document, window } = await bootApp({ serverNotes: notes });
+
+    const chips = [...document.querySelectorAll('#quick-picks button')];
+    assert.deepEqual(chips.map((c) => c.textContent), ['CS', 'B站'], '应按频率排序且过滤掉低频项');
+
+    chips[0].dispatchEvent(new window.Event('click', { bubbles: true }));
+    assert.equal(document.getElementById('quick-content').value, 'CS', '点击应填入标题');
+});
+
+test('常用条目：双击 chip 直接记录一条笔记', async () => {
+    const notes = [];
+    for (let i = 0; i < 3; i += 1) notes.push(makeNote({ id: `x-${i}`, content: '洗澡', createdAt: i }));
+    const { document, window, state } = await bootApp({ serverNotes: notes });
+    const before = document.querySelectorAll('.note-card').length;
+
+    const chip = document.querySelector('#quick-picks button');
+    chip.dispatchEvent(new window.Event('dblclick', { bubbles: true }));
+    await flush(80);
+
+    assert.equal(state.serverNotes.length, notes.length + 1, '应新增一条');
+    assert.equal(document.querySelectorAll('.note-card').length, before + 1);
+});
+
+test('时间接续：显示上一条结束与空档，「补记空档」把起止时间铺满空白', async () => {
+    const RealDate = globalThis.Date;
+    const FIXED = new RealDate(2026, 9, 6, 14, 0, 0); // 本地时间 2026-10-06 14:00
+    class MockDate extends RealDate {
+        constructor(...args) { super(...(args.length === 0 ? [FIXED.getTime()] : args)); }
+        static now() { return FIXED.getTime(); }
+    }
+    globalThis.Date = MockDate;
+    try {
+        const { document, window } = await bootApp({
+            serverNotes: [makeNote({
+                id: 'prev', date: '2026-10-06', timeStart: '12:00', timeEnd: '12:30',
+                content: '上一条', createdAt: 1
+            })]
+        });
+
+        const hint = document.getElementById('quick-continuity-text');
+        const btn = document.getElementById('quick-continue-btn');
+        assert.match(hint.textContent, /12:30/, '应显示上一条的结束时间');
+        assert.match(hint.textContent, /空档 1小时30分钟/);
+        assert.equal(btn.classList.contains('hidden'), false, '有空档时应出现补记按钮');
+
+        btn.dispatchEvent(new window.Event('click', { bubbles: true }));
+        assert.equal(document.getElementById('quick-time-start').value, '12:30');
+        assert.equal(document.getElementById('quick-time-end').value, '14:00', '结束时间应铺到当前时刻');
+    } finally {
+        globalThis.Date = RealDate;
+    }
+});
+
+test('时间接续：刚记完不会提示空档，按钮也不出现', async () => {
+    const RealDate = globalThis.Date;
+    const FIXED = new RealDate(2026, 9, 6, 14, 0, 0);
+    class MockDate2 extends RealDate {
+        constructor(...args) { super(...(args.length === 0 ? [FIXED.getTime()] : args)); }
+        static now() { return FIXED.getTime(); }
+    }
+    globalThis.Date = MockDate2;
+    try {
+        const { document } = await bootApp({
+            serverNotes: [makeNote({
+                id: 'now', date: '2026-10-06', timeStart: '13:40', timeEnd: '13:58',
+                content: '刚记完', createdAt: 1
+            })]
+        });
+        assert.equal(document.getElementById('quick-continue-btn').classList.contains('hidden'), true);
+        assert.match(document.getElementById('quick-continuity-text').textContent, /13:58/);
+    } finally {
+        globalThis.Date = RealDate;
+    }
+});
+
+test('惰性渲染：折叠的日期分组不生成卡片 DOM，展开时才补上', async () => {
+    const notes = [
+        makeNote({ id: 'today-1', content: '今天的' }),
+        makeNote({ id: 'sep-2', date: '2026-09-02', content: '九月二号', createdAt: 2 }),
+        makeNote({ id: 'sep-1a', date: '2026-09-01', content: '九月一号A', createdAt: 1 }),
+        makeNote({ id: 'sep-1b', date: '2026-09-01', content: '九月一号B', createdAt: 0 })
+    ];
+    const { document, window } = await bootApp({ serverNotes: notes });
+
+    assert.equal(document.querySelectorAll('.date-group').length, 3, '三个日期三个分组');
+    assert.equal(document.querySelectorAll('.note-card').length, 1, '只有展开的今天生成了卡片');
+
+    const group = [...document.querySelectorAll('.date-group')].find((g) => g.dataset.date === '2026-09-01');
+    group.querySelector('.date-header').dispatchEvent(new window.Event('click', { bubbles: true }));
+    await flush(30);
+
+    assert.equal(document.querySelectorAll('.note-card').length, 3, '展开后补上该日期的两张卡片');
+    const card = document.querySelector('.note-card[data-note-id="sep-1a"]');
+    assert.ok(card, '补上的卡片应可被定位');
+    assert.equal(card.classList.contains('hidden'), false, '展开后卡片必须可见');
+    assert.match(document.querySelector('.note-count').textContent || '', /条笔记/);
+});
+
+test('惰性渲染：折叠分组里的笔记仍能被选中并参与 AI 总结', async () => {
+    const notes = [
+        makeNote({ id: 'today-1', content: '今天的' }),
+        makeNote({ id: 'old-1', date: '2026-09-01', content: '旧笔记', createdAt: 1 })
+    ];
+    const { document } = await bootApp({ serverNotes: notes });
+
+    // 进选择模式 → 点折叠分组的标题 = 整组选中
+    document.getElementById('selection-toggle-btn')
+        .dispatchEvent(new globalThis.window.Event('click', { bubbles: true }));
+    await flush(20);
+    const group = [...document.querySelectorAll('.date-group')].find((g) => g.dataset.date === '2026-09-01');
+    group.querySelector('.date-header').dispatchEvent(new globalThis.window.Event('click', { bubbles: true }));
+    await flush(30);
+
+    assert.match(document.getElementById('selection-toggle-btn').textContent, /确认，开始AI总结 \(1\)/);
+    document.getElementById('selection-toggle-btn')
+        .dispatchEvent(new globalThis.window.Event('click', { bubbles: true }));
+    await flush(30);
+    const preview = document.querySelectorAll('#selected-notes-preview > div');
+    assert.equal(preview.length, 1, '未渲染的笔记也要能进入 AI 总结');
+    assert.match(preview[0].textContent, /旧笔记/);
+});

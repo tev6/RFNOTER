@@ -454,6 +454,35 @@ async function runSelfTest() {
     // 任务栏/窗口标题显示的就是它
     check('窗口标题为「闪录」', win.getTitle() === '闪录', win.getTitle());
 
+    // v2.3.0 新增的三块：常用条目容器、接续提示、惰性渲染
+    const quick = await win.webContents.executeJavaScript(`(() => {
+        const text = document.getElementById('quick-continuity-text');
+        const btn = document.getElementById('quick-continue-btn');
+        const picks = document.getElementById('quick-picks');
+        return {
+            continuity: text ? text.textContent : null,
+            hasContinueBtn: !!btn,
+            hasPicks: !!picks,
+            dateGroups: document.querySelectorAll('.date-group').length,
+            cards: document.querySelectorAll('.note-card').length
+        };
+    })()`);
+    check(
+        '接续提示读到了刚写入的笔记',
+        !!quick.continuity && quick.continuity.includes('结束'),
+        quick.continuity
+    );
+    check(
+        '常用条目与补记空档的容器都在',
+        quick.hasContinueBtn === true && quick.hasPicks === true,
+        JSON.stringify(quick)
+    );
+    check(
+        '卡片总数不超过笔记总数（惰性渲染没有多生成）',
+        quick.cards > 0 && quick.cards <= quick.dateGroups * 50,
+        `分组 ${quick.dateGroups} / 卡片 ${quick.cards}`
+    );
+
     // 布局体检：窗口是 1180 宽，页面不能出现横向溢出把右侧按钮挤出去
     const layout = await win.webContents.executeJavaScript(`(() => {
         const root = document.documentElement;

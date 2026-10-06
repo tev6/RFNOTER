@@ -15,9 +15,15 @@ const INDEX_HTML = fs.readFileSync(new URL('../public/index.html', import.meta.u
 /** 本进程统一使用的 userId（第一个用例里由「沿用已有文件」逻辑选定）。 */
 const USER_ID = 'legacy-user';
 
+/** 假数据一律用"今天"：非今天的分组默认折叠，卡片是惰性渲染的、不在 DOM 里。 */
+const today = () => {
+    const now = new Date();
+    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+};
+
 function makeNote(overrides = {}) {
     return {
-        id: 'n-1', date: '2026-05-14', timeStart: '09:00', timeEnd: '09:40',
+        id: 'n-1', date: today(), timeStart: '09:00', timeEnd: '09:40',
         content: '笔记一', tag: '', color: '', details: '',
         expanded: false, createdAt: 1, updatedAt: 1, ...overrides
     };

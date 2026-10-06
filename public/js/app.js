@@ -89,6 +89,16 @@ const closeHelpBtn2 = document.getElementById('close-help-btn2');
 const exportBtn = document.getElementById('export-btn');
 const importBtn = document.getElementById('import-btn');
 const importFileInput = document.getElementById('import-file-input');
+const quickPicks = document.getElementById('quick-picks');
+const quickContinuityText = document.getElementById('quick-continuity-text');
+const quickContinueBtn = document.getElementById('quick-continue-btn');
+
+/**
+ * 折叠分组里"还没生成 DOM"的笔记。
+ * 上千条笔记时，绝大多数卡片都躺在折叠的分组里、根本看不见，
+ * 却会占掉两万多个 DOM 节点；展开时再惰性渲染。
+ */
+const lazyGroupNotes = new Map();
 
 document.addEventListener('DOMContentLoaded', async () => {
     // 先绑定事件，再加载数据：即使数据异常，界面也不会变成一张点不动的死图。
@@ -180,7 +190,139 @@ async function initializeNotes() {
     }
 
     renderNotes();
+    renderQuickPicks();
+    updateQuickContinuity();
     updateSyncStatus();
+}
+
+/* ------------------------------------------------------------------ */
+/* 高频录入：常用条目 + 时间接续                                        */
+/* ------------------------------------------------------------------ */
+
+/**
+ * 从历史笔记里算出「常用条目」。
+ * 依据：1133 条真实数据里 40.5% 的标题是重复的（CS 用了 146 次、B站 90 次），
+ * 而这些重复正是每天 11.7 次录入里最浪费时间的部分。
+ * 数据全部现算，不新增存储、不需要迁移。
+ */
+function computeQuickPicks(limit = 8) {
+    const stats = new Map();
+    for (const note of notes) {
+        const key = (note.content || '').trim();
+        if (!key) continue;
+        const entry = stats.get(key) || { count: 0, lastUsedAt: 0 };
+        entry.count += 1;
+        entry.lastUsedAt = Math.max(entry.lastUsedAt, Number(note.createdAt) || 0);
+        stats.set(key, entry);
+    }
+    const now = Date.now();
+    const week = 7 * 86400000;
+    return [...stats.entries()]
+        .filter(([, entry]) => entry.count >= 2)   // 只用过一次的不算"常用"
+        .map(([content, entry]) => ({
+            content,
+            count: entry.count,
+            lastUsedAt: entry.lastUsedAt,
+            // 频率为主；最近一周用过的额外加权，避免旧习惯长期占位
+            score: entry.count + (now - entry.lastUsedAt < week ? 3 : 0)
+        }))
+        .sort((a, b) => b.score - a.score || b.lastUsedAt - a.lastUsedAt)
+        .slice(0, limit);
+}
+
+function renderQuickPicks() {
+    if (!quickPicks) return;
+    const picks = computeQuickPicks();
+    quickPicks.innerHTML = '';
+    if (picks.length === 0) {
+        quickPicks.classList.add('hidden');
+        quickPicks.classList.remove('flex');
+        return;
+    }
+    picks.forEach(({ content, count }) => {
+        const chip = document.createElement('button');
+        chip.type = 'button';   // 必须在表单外/非 submit，否则点一下就把笔记提交了
+        chip.className = 'px-2.5 py-1 text-xs rounded-full bg-white border border-gray-300 text-gray-700 hover:border-primary hover:text-primary transition-colors duration-150';
+        chip.textContent = content;
+        chip.title = `用过 ${count} 次 · 点击填入，双击直接记录`;
+        chip.addEventListener('click', () => fillQuickContent(content));
+        chip.addEventListener('dblclick', () => {
+            fillQuickContent(content);
+            if (typeof quickAddForm.requestSubmit === 'function') quickAddForm.requestSubmit();
+        });
+        quickPicks.appendChild(chip);
+    });
+    quickPicks.classList.remove('hidden');
+    quickPicks.classList.add('flex');
+}
+
+function fillQuickContent(content) {
+    const input = document.getElementById('quick-content');
+    if (!input) return;
+    input.value = content;
+    input.focus();
+}
+
+/** 把「今天第 N 分钟」换算成时间戳。 */
+function timestampOfToday(minutes) {
+    const date = new Date();
+    date.setHours(Math.floor(minutes / 60), minutes % 60, 0, 0);
+    return date.getTime();
+}
+
+/**
+ * 今天最后一条笔记的结束时间。
+ * 之前续接只依赖内存里的 lastEndTime，重启应用后就断了——这里改成从数据里推导，
+ * 让"接着上一条继续记"跨重启也能成立。
+ */
+function getTodayLastEnd() {
+    const today = getCurrentDateString();
+    let latest = null;
+    for (const note of notes) {
+        if (note.date !== today) continue;
+        if (!latest || (Number(note.createdAt) || 0) > (Number(latest.createdAt) || 0)) latest = note;
+    }
+    if (!latest) return null;
+    const start = parseClockMinutes(latest.timeStart);
+    const end = parseClockMinutes(latest.timeEnd);
+    if (start === null || end === null) return null;
+    return { minutes: end, crossDay: end < start, note: latest };
+}
+
+/** 刷新接续提示：上一条什么时候结束的、空档多久。 */
+function updateQuickContinuity() {
+    if (!quickContinuityText || !quickContinueBtn) return;
+    const last = getTodayLastEnd();
+    if (!last) {
+        quickContinuityText.textContent = '今天还没有记录';
+        quickContinuityText.className = 'text-xs text-gray-400';
+        quickContinueBtn.classList.add('hidden');
+        return;
+    }
+    const clock = minutesToClock(last.minutes);
+    const gapMinutes = Math.round((Date.now() - timestampOfToday(last.minutes)) / 60000);
+    if (gapMinutes >= 10) {
+        quickContinuityText.textContent = `上一条 ${clock} 结束 · 空档 ${formatDuration(gapMinutes)}`;
+        quickContinuityText.className = 'text-xs text-amber-600';
+        quickContinueBtn.classList.remove('hidden');
+    } else {
+        quickContinuityText.textContent = `上一条 ${clock} 结束`;
+        quickContinuityText.className = 'text-xs text-gray-500';
+        quickContinueBtn.classList.add('hidden');
+    }
+}
+
+/** 「补记空档」：起止时间一键铺满从上一条结束到现在的这段空白。 */
+function fillGapToNow() {
+    const last = getTodayLastEnd();
+    if (!last) return;
+    const startMinutes = last.minutes;
+    const now = new Date();
+    const endMinutes = Math.ceil((now.getHours() * 60 + now.getMinutes()) / 5) * 5;
+    document.getElementById('quick-time-start').value = minutesToClock(startMinutes);
+    document.getElementById('quick-time-end').value = minutesToClock(Math.max(endMinutes, startMinutes + 5));
+    document.getElementById('quick-content').focus();
+    updateQuickContinuity();
 }
 
 function initQuickInput() {
@@ -192,12 +334,18 @@ function initQuickInput() {
     if (lastEndTime) {
         startTime = new Date(lastEndTime);
     } else {
-        startTime = new Date(now);
-        const minutes = startTime.getMinutes();
-        const nextFiveMinute = Math.ceil(minutes / 5) * 5;
-        startTime.setMinutes(nextFiveMinute);
-        startTime.setSeconds(0);
-        startTime.setMilliseconds(0);
+        // 跨重启也能接上：从今天的最后一条推导，而不是只有内存里的 lastEndTime 才算
+        const derived = getTodayLastEnd();
+        if (derived && !derived.crossDay) {
+            startTime = new Date(timestampOfToday(derived.minutes));
+        } else {
+            startTime = new Date(now);
+            const minutes = startTime.getMinutes();
+            const nextFiveMinute = Math.ceil(minutes / 5) * 5;
+            startTime.setMinutes(nextFiveMinute);
+            startTime.setSeconds(0);
+            startTime.setMilliseconds(0);
+        }
     }
     const endTime = new Date(startTime.getTime() + CONFIG.DEFAULT_DURATION_MINUTES * 60000);
     const startHour = String(startTime.getHours()).padStart(2, '0');
@@ -226,24 +374,41 @@ function renderNotes() {
                 const isToday = isTodayDate(date);
                 const dateGroupElement = createDateGroupElement(date, dateNotes.length, isToday);
                 notesContainer.appendChild(dateGroupElement);
-                dateNotes.forEach(note => {
-                    const noteElement = createNoteElement(note);
-                    notesContainer.appendChild(noteElement);
-                    if (!isToday) {
-                        dateGroupElement.classList.add('collapsed');
-                        const toggleIcon = dateGroupElement.querySelector('.toggle-icon');
-                        if (toggleIcon) {
-                            toggleIcon.classList.remove('fa-chevron-down');
-                            toggleIcon.classList.add('fa-chevron-right');
-                        }
-                        noteElement.classList.add('hidden');
-                    }
-                });
+                if (isToday) {
+                    dateNotes.forEach(note => notesContainer.appendChild(createNoteElement(note)));
+                } else {
+                    // 折叠的分组先不建卡片：1133 条笔记时全部卡片加起来有 2.4 万个节点，
+                    // 而其中绝大多数都躺在折叠的日期里看不见。展开时再补（见 flushLazyGroup）。
+                    markGroupCollapsed(dateGroupElement, true);
+                    lazyGroupNotes.set(dateGroupElement, dateNotes);
+                }
             });
         if (selectionMode) bindDateGroupSelectionEvents();
     }
 
     if (scrollY > 0) window.scrollTo(0, scrollY);
+}
+
+/** 统一处理折叠/展开的外观（class + 箭头图标）。 */
+function markGroupCollapsed(dateGroup, collapsed) {
+    dateGroup.classList.toggle('collapsed', collapsed);
+    const toggleIcon = dateGroup.querySelector('.toggle-icon');
+    if (!toggleIcon) return;
+    toggleIcon.classList.toggle('fa-chevron-right', collapsed);
+    toggleIcon.classList.toggle('fa-chevron-down', !collapsed);
+}
+
+/** 展开折叠分组时，把它跳过的卡片补进 DOM。 */
+function flushLazyGroup(dateGroup) {
+    const pending = lazyGroupNotes.get(dateGroup);
+    if (!pending || pending.length === 0) return;
+    lazyGroupNotes.delete(dateGroup);
+    let anchor = dateGroup;
+    for (const note of pending) {
+        const noteElement = createNoteElement(note);
+        anchor.after(noteElement);
+        anchor = noteElement;
+    }
 }
 
 /** 只切换空状态提示，供增量渲染路径复用。 */
@@ -287,14 +452,7 @@ function renderNoteElement(note) {
         if (anchor) notesContainer.insertBefore(dateGroupElement, anchor);
         else notesContainer.appendChild(dateGroupElement);
 
-        if (!isToday) {
-            dateGroupElement.classList.add('collapsed');
-            const toggleIcon = dateGroupElement.querySelector('.toggle-icon');
-            if (toggleIcon) {
-                toggleIcon.classList.remove('fa-chevron-down');
-                toggleIcon.classList.add('fa-chevron-right');
-            }
-        }
+        if (!isToday) markGroupCollapsed(dateGroupElement, true);
     }
 
     const noteElement = createNoteElement(note);
@@ -319,39 +477,33 @@ function renderNoteElement(note) {
 }
 
 /** 增量移除一条笔记的 DOM，并清理空掉的分组。 */
-function removeNoteElement(noteId) {
+function removeNoteElement(noteId, date) {
     const noteElement = document.querySelector(`.note-card[data-note-id="${noteId}"]`);
-    if (!noteElement) return;
+    if (noteElement) noteElement.remove();
 
-    // 往前找所属的日期分组（不能只看 previousElementSibling，同组第 2 条之后就不是分组了）
-    let dateGroup = noteElement.previousElementSibling;
-    while (dateGroup && !dateGroup.classList.contains('date-group')) {
-        dateGroup = dateGroup.previousElementSibling;
+    const dateGroup = findDateGroupElement(date);
+    if (!dateGroup) return;
+
+    // 折叠分组里的卡片可能还没渲染，要从待渲染列表里一并剔除，否则展开时它会"复活"
+    const pending = lazyGroupNotes.get(dateGroup);
+    if (pending) {
+        const index = pending.findIndex(n => n.id === noteId);
+        if (index !== -1) pending.splice(index, 1);
     }
-
-    noteElement.remove();
-
-    const stillHasNotes = dateGroup
-        && dateGroup.nextElementSibling
-        && dateGroup.nextElementSibling.classList.contains('note-card');
-
-    if (dateGroup && !stillHasNotes) dateGroup.remove();
-    else if (dateGroup) updateDateGroupCount(dateGroup);
+    updateDateGroupCount(dateGroup);
 }
 
-/** 刷新分组标题上的「N 条笔记」。 */
+/** 刷新分组标题上的「N 条笔记」。数量以 notes 为准，因为折叠分组的卡片可能还没渲染。 */
 function updateDateGroupCount(dateGroup) {
     if (!dateGroup) return;
+    const date = dateGroup.dataset.date;
+    const count = notes.filter(n => n.date === date).length;
     const countSpan = dateGroup.querySelector('.note-count');
-    if (!countSpan) return;
-    let count = 0;
-    let cursor = dateGroup.nextElementSibling;
-    while (cursor && !cursor.classList.contains('date-group')) {
-        if (cursor.classList.contains('note-card')) count += 1;
-        cursor = cursor.nextElementSibling;
+    if (countSpan) countSpan.textContent = `${count} 条笔记`;
+    if (count === 0) {
+        lazyGroupNotes.delete(dateGroup);
+        dateGroup.remove();
     }
-    countSpan.textContent = `${count} 条笔记`;
-    if (count === 0) dateGroup.remove();
 }
 
 function createDateGroupElement(date, noteCount, isToday) {
@@ -376,26 +528,10 @@ function createDateGroupElement(date, noteCount, isToday) {
     `;
     const dateHeader = dateGroupDiv.querySelector('.date-header');
     if (!selectionMode) {
+        // 必须走 setDateGroupCollapsed：惰性渲染的卡片是在那里补出来的。
+        // 之前这段是内联实现，绕过它会导致"展开一个折叠的日期是空的"。
         dateHeader.addEventListener('click', () => {
-            dateGroupDiv.classList.toggle('collapsed');
-            const toggleIcon = dateGroupDiv.querySelector('.toggle-icon');
-            if (dateGroupDiv.classList.contains('collapsed')) {
-                toggleIcon.classList.remove('fa-chevron-down');
-                toggleIcon.classList.add('fa-chevron-right');
-                let nextElement = dateGroupDiv.nextElementSibling;
-                while (nextElement && !nextElement.classList.contains('date-group')) {
-                    nextElement.classList.add('hidden');
-                    nextElement = nextElement.nextElementSibling;
-                }
-            } else {
-                toggleIcon.classList.remove('fa-chevron-right');
-                toggleIcon.classList.add('fa-chevron-down');
-                let nextElement = dateGroupDiv.nextElementSibling;
-                while (nextElement && !nextElement.classList.contains('date-group')) {
-                    nextElement.classList.remove('hidden');
-                    nextElement = nextElement.nextElementSibling;
-                }
-            }
+            setDateGroupCollapsed(dateGroupDiv, !dateGroupDiv.classList.contains('collapsed'));
         });
     }
     return dateGroupDiv;
@@ -562,18 +698,16 @@ function updateDateGroupSelectionUI(dateGroup, noteIds) {
 }
 
 function bindDateGroupSelectionEvents() {
-    const dateGroups = document.querySelectorAll('.date-group');
-    dateGroups.forEach(group => {
-        const noteIds = [];
-        let nextElement = group.nextElementSibling;
-        while (nextElement && !nextElement.classList.contains('date-group')) {
-            if (nextElement.classList.contains('note-card')) noteIds.push(nextElement.dataset.noteId);
-            nextElement = nextElement.nextElementSibling;
-        }
+    document.querySelectorAll('.date-group').forEach(group => {
+        // 必须从数据里取该分组的笔记：折叠的分组压根没有卡片节点，
+        // 靠 DOM 兄弟节点收集会得到空数组，整组选择就失效了。
+        const noteIds = notes.filter(n => n.date === group.dataset.date).map(n => n.id);
         dateGroupNotesMap.set(group, noteIds);
         const dateHeader = group.querySelector('.date-header');
-        dateHeader.addEventListener('click', handleDateGroupClick);
-        dateHeader.style.cursor = 'pointer';
+        if (dateHeader) {
+            dateHeader.addEventListener('click', handleDateGroupClick);
+            dateHeader.style.cursor = 'pointer';
+        }
         updateDateGroupSelectionUI(group, noteIds);
     });
 }
@@ -619,29 +753,13 @@ function handleDateGroupClick(e) {
 
 function setDateGroupCollapsed(dateGroup, collapsed) {
     if (!dateGroup) return;
-    const toggleIcon = dateGroup.querySelector('.toggle-icon');
-    if (collapsed) {
-        dateGroup.classList.add('collapsed');
-        if (toggleIcon) {
-            toggleIcon.classList.remove('fa-chevron-down');
-            toggleIcon.classList.add('fa-chevron-right');
-        }
-        let nextElement = dateGroup.nextElementSibling;
-        while (nextElement && !nextElement.classList.contains('date-group')) {
-            nextElement.classList.add('hidden');
-            nextElement = nextElement.nextElementSibling;
-        }
-    } else {
-        dateGroup.classList.remove('collapsed');
-        if (toggleIcon) {
-            toggleIcon.classList.remove('fa-chevron-right');
-            toggleIcon.classList.add('fa-chevron-down');
-        }
-        let nextElement = dateGroup.nextElementSibling;
-        while (nextElement && !nextElement.classList.contains('date-group')) {
-            nextElement.classList.remove('hidden');
-            nextElement = nextElement.nextElementSibling;
-        }
+    // 展开前先把惰性跳过的卡片补上，否则展开出来是空的
+    if (!collapsed) flushLazyGroup(dateGroup);
+    markGroupCollapsed(dateGroup, collapsed);
+    let nextElement = dateGroup.nextElementSibling;
+    while (nextElement && !nextElement.classList.contains('date-group')) {
+        nextElement.classList.toggle('hidden', collapsed);
+        nextElement = nextElement.nextElementSibling;
     }
 }
 
@@ -782,6 +900,8 @@ async function handleFileImport(event) {
 
         const result = await saveNotes();
         renderNotes();
+        renderQuickPicks();
+        updateQuickContinuity();
         showSaveIndicator(result.ok ? `已导入 ${newNotes.length} 条笔记` : `已导入到本机，尚未写入${STORE_LABEL}`);
     } catch (error) {
         console.error('[RFNOTER] 导入失败', error);
@@ -866,6 +986,7 @@ function quickAddNote(e) {
     // 增量插入，避免每新增一条就重建整个列表
     renderNoteElement(newNote);
     updateEmptyState();
+    renderQuickPicks();
     const [hours, minutes] = timeEnd.split(':');
     const today = new Date();
     const endTime = new Date(today);
@@ -874,6 +995,7 @@ function quickAddNote(e) {
     document.getElementById('quick-content').value = '';
     document.getElementById('quick-tag').value = '';
     initQuickInput();
+    updateQuickContinuity();
     document.getElementById('quick-content').focus();
 }
 
@@ -930,6 +1052,8 @@ function saveNote() {
     }
     saveNotes();
     renderNotes();
+    renderQuickPicks();
+    updateQuickContinuity();
     closeNoteModal();
 }
 
@@ -962,10 +1086,13 @@ function deleteNote() {
         // 动画期间数组可能已经变化，必须在真正删除时按 id 重新定位
         const index = notes.findIndex(note => note.id === noteId);
         if (index === -1) return;
-        notes.splice(index, 1);
+        const [removed] = notes.splice(index, 1);
         saveNotes();
-        removeNoteElement(noteId);
+        // 把日期传下去：折叠分组里的卡片可能还没渲染，靠 DOM 找不到
+        removeNoteElement(noteId, removed.date);
         updateEmptyState();
+        renderQuickPicks();
+        updateQuickContinuity();
     };
     // noteId 来自 normalizeNote / validateNoteImport，已被 SAFE_ID_RE 白名单约束，
     // 不含引号或反斜杠，可以直接放进属性选择器（也就不依赖 CSS.escape）
@@ -1008,6 +1135,8 @@ function duplicateNote() {
     notes.unshift(duplicatedNote);
     saveNotes();
     renderNotes();
+    renderQuickPicks();
+    updateQuickContinuity();
     closeContextMenu();
 }
 
@@ -1129,6 +1258,7 @@ function closeHelpModal() {
 
 function bindEventListeners() {
     initSelectionMode();
+    if (quickContinueBtn) quickContinueBtn.addEventListener('click', fillGapToNow);
     quickAddForm.addEventListener('submit', quickAddNote);
     const quickTagEl = document.getElementById('quick-tag');
     if (quickTagEl) quickTagEl.addEventListener('input', () => { quickTagEl.value = trimTagToLimit(quickTagEl.value); });
