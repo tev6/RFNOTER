@@ -70,7 +70,10 @@ jobs:
         run: npm ci
 
       - name: 构建 NSIS 安装包
-        run: npm run dist
+        # --publish never 是必须的：electron-builder 检测到 git tag 会**自动尝试发布**到
+        # GitHub，而 CI 里没有 GH_TOKEN，于是"构建成功但 job 失败"。
+        # Release 由本地用 gh release create 发布，CI 只负责产出可下载的 artifact。
+        run: npm run dist -- --publish never
         env:
           # 没打算做代码签名，跳过证书探测，省时间也避免无谓报错
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
