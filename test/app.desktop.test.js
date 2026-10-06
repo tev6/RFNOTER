@@ -94,6 +94,9 @@ async function bootDesktop({ files = {}, localNotes = null, failWrite = false, s
     globalThis.localStorage = window.localStorage;
     globalThis.CSS = window.CSS;
     globalThis.DOMParser = window.DOMParser;
+    // app.js 里会 new Event(...) 派发 input 事件；不注入的话用的是 Node 的 Event，
+    // jsdom 的 dispatchEvent 会拒绝它（"parameter 1 is not of type 'Event'"）
+    globalThis.Event = window.Event;
     globalThis.alert = window.alert;
     globalThis.confirm = window.confirm;
     globalThis.File = window.File;
@@ -211,7 +214,12 @@ test('桌面端：窗口内也能正常导出（不依赖服务端）', async ()
     const created = [];
     globalThis.URL.createObjectURL = (blob) => { created.push(blob); return 'blob:test'; };
 
+    // 导出现在是"先弹格式菜单，再选格式"
     document.getElementById('export-btn').dispatchEvent(new window.Event('click', { bubbles: true }));
+    await flush(20);
+    assert.equal(created.length, 0, '只是弹菜单不该写文件');
+    document.querySelector('.export-menu-item[data-format="json"]')
+        .dispatchEvent(new window.Event('click', { bubbles: true }));
     await flush(20);
 
     assert.equal(created.length, 1);

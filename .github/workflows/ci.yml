@@ -1,0 +1,85 @@
+name: CI
+
+# 目标平台是 Windows，所以测试也跑在 windows-latest 上：
+# 用 ubuntu 会引入一堆与真实运行环境不符的平台差异，对自用项目没有收益。
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: 测试 (Node ${{ matrix.node }})
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # engines 声明的是 >=20.11，用最低和当前两个版本各跑一次，避免偷偷用上新 API
+        node: ['20', '24']
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+
+      - name: 安装依赖
+        run: npm ci
+
+      - name: 单元测试与集成测试
+        run: npm test
+
+  selftest:
+    name: 桌面端自检
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+
+      - name: 安装依赖
+        run: npm ci
+
+      # --selftest 用临时 userData，不会碰到真实笔记；失败会以非零码退出
+      - name: 启动 Electron 自检
+        run: npm run app:selftest
+
+  package:
+    name: 打包安装包
+    # 只有打 tag 或手动触发才构建，避免每次提交都下 100MB 的 Electron
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+
+      - name: 安装依赖
+        run: npm ci
+
+      - name: 构建 NSIS 安装包
+        run: npm run dist
+        env:
+          # 没打算做代码签名，跳过证书探测，省时间也避免无谓报错
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+
+      - name: 上传安装包
+        uses: actions/upload-artifact@v4
+        with:
+          name: RFNOTER-Setup
+          path: |
+            dist/*.exe
+            dist/*.blockmap
+          if-no-files-found: error

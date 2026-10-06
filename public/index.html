@@ -40,6 +40,15 @@
             .quick-input-row {
                 @apply grid grid-cols-12 gap-2 items-center w-full;
             }
+            /* 时间微调按钮：小、方、只改一个字段，避免为它撑高整个录入栏 */
+            .time-step-btn {
+                @apply inline-flex items-center justify-center h-9 min-w-[26px] px-1 rounded border border-gray-300 bg-white
+                       text-gray-600 text-sm leading-none select-none transition-colors duration-150
+                       hover:border-primary hover:text-primary active:scale-95;
+            }
+            .export-menu-item {
+                @apply w-full text-left px-4 py-2 text-sm text-gray-700 transition-colors duration-150 hover:bg-gray-100;
+            }
             .note-row-layout {
                 @apply grid grid-cols-12 gap-2 items-center w-full;
             }
@@ -128,7 +137,8 @@
                 <img src="icon.png" alt="" class="w-8 h-8 rounded-lg shadow-sm">
                 <h1 class="text-xl font-bold">闪录</h1>
                 <button id="help-btn" class="text-sm text-primary hover:text-primary/80 ml-4 transition-colors duration-150">帮助？</button>
-                <button id="export-btn" class="text-sm text-gray-600 hover:text-gray-800 ml-2 transition-colors duration-150" title="导出笔记">
+                <button id="export-btn" class="text-sm text-gray-600 hover:text-gray-800 ml-2 transition-colors duration-150"
+                        title="导出笔记（JSON 备份 / Markdown / CSV）">
                     <i class="fa fa-download mr-1"></i>导出
                 </button>
                 <button id="import-btn" class="text-sm text-gray-600 hover:text-gray-800 transition-colors duration-150" title="导入笔记">
@@ -200,15 +210,26 @@
                     <div class="col-span-2 md:col-span-2 lg:col-span-2">
                         <input type="text" id="quick-date" class="input-field text-center" readonly>
                     </div>
-                    <div class="col-span-4 md:col-span-3 lg:col-span-3 flex gap-1 quick-input-time-group">
-                        <input type="time" id="quick-time-start" class="input-field" required>
+                    <div class="col-span-4 md:col-span-3 lg:col-span-4 flex gap-1 quick-input-time-group items-center">
+                        <input type="time" id="quick-time-start" class="input-field" required
+                               title="按 Alt+↑/↓ 可以 5 分钟为单位微调">
                         <span class="flex items-center justify-center px-1 text-gray-500">~</span>
-                        <input type="time" id="quick-time-end" class="input-field" required>
+                        <input type="time" id="quick-time-end" class="input-field" required
+                               title="按 Alt+↑/↓ 可以 5 分钟为单位微调">
+                        <!-- 窄窗口放不下就隐藏：这些是高频补记时的快捷操作，不是必需路径 -->
+                        <div class="hidden lg:flex items-center gap-0.5 shrink-0">
+                            <button type="button" class="time-step-btn" data-target="quick-time-end" data-delta="-5"
+                                    title="结束时间 −5 分钟">−</button>
+                            <button type="button" class="time-step-btn" data-target="quick-time-end" data-delta="5"
+                                    title="结束时间 +5 分钟">+</button>
+                            <button type="button" id="quick-now-btn" class="time-step-btn px-2"
+                                    title="把结束时间设为现在（常用于补记刚做完的事）">现在</button>
+                        </div>
                     </div>
                     <div class="col-span-4 md:col-span-4 lg:col-span-4">
                         <input type="text" id="quick-content" class="input-field" placeholder="输入笔记标题" required>
                     </div>
-                    <div class="col-span-1 md:col-span-2 lg:col-span-2">
+                    <div class="col-span-1 md:col-span-2 lg:col-span-1">
                         <input type="text" id="quick-tag" class="input-field" placeholder="标签">
                     </div>
                     <div class="col-span-1">
@@ -473,6 +494,22 @@
                 </div>
             </div>
         </div>
+    </div>
+
+    <!-- 导出格式选择：JSON 无损可再导入，Markdown/CSV 是拿出去用的 -->
+    <div id="export-menu" class="hidden fixed z-50 w-56 bg-white/95 backdrop-blur-md rounded-md shadow-lg border border-gray-200 py-1">
+        <button type="button" class="export-menu-item" data-format="json">
+            <i class="fa fa-archive mr-2"></i>JSON 完整备份
+            <span class="block pl-6 text-xs text-gray-400">无损，可再导入</span>
+        </button>
+        <button type="button" class="export-menu-item" data-format="md">
+            <i class="fa fa-file-text-o mr-2"></i>Markdown
+            <span class="block pl-6 text-xs text-gray-400">按日期分节，方便阅读</span>
+        </button>
+        <button type="button" class="export-menu-item" data-format="csv">
+            <i class="fa fa-table mr-2"></i>CSV
+            <span class="block pl-6 text-xs text-gray-400">表格/脚本，Excel 可直接打开</span>
+        </button>
     </div>
 
     <div id="context-menu" class="hidden fixed z-50 w-48 bg-white/70 backdrop-blur-md rounded-md shadow-lg py-1 animate-slide-in">

@@ -9,6 +9,7 @@ import {
     backupLocalNotes, hasPendingChanges, fetchAvailableModels,
     setApiKey, getApiKey, ApiError, REQUEST_TIMEOUT_MS, isDesktopApp
 } from './api.js';
+import { notesToJson, notesToMarkdown, notesToCsv, exportFilename, mimeFor } from './exporters.js';
 
 /**
  * 笔记的真源叫什么，两种形态下说法不同：
@@ -323,6 +324,31 @@ function fillGapToNow() {
     document.getElementById('quick-time-end').value = minutesToClock(Math.max(endMinutes, startMinutes + 5));
     document.getElementById('quick-content').focus();
     updateQuickContinuity();
+}
+
+/** 把某个时间输入直接设成指定分钟数。 */
+function setTimeInputTo(inputId, totalMinutes) {
+    const input = document.getElementById(inputId);
+    if (!input) return;
+    input.value = minutesToClock(totalMinutes);
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+}
+
+/** 把某个时间输入拨动 N 分钟（自动绕圈，23:55 +5 → 00:00）。 */
+function stepTimeInput(inputId, deltaMinutes) {
+    const input = document.getElementById(inputId);
+    if (!input || !input.value) return;
+    const minutes = parseClockMinutes(input.value);
+    if (minutes === null) return;
+    setTimeInputTo(inputId, minutes + deltaMinutes);
+}
+
+/** 「现在」：把结束时间设为当前时刻（向上取整到 5 分钟）。 */
+function setEndTimeToNow() {
+    const now = new Date();
+    const rounded = Math.ceil((now.getHours() * 60 + now.getMinutes()) / 5) * 5;
+    setTimeInputTo('quick-time-end', rounded);
+    document.getElementById('quick-content').focus();
 }
 
 function initQuickInput() {
@@ -773,33 +799,79 @@ function initSelectionMode() {
 
 /** 绑定导出 / 导入按钮（v1.2.0 功能）。 */
 function initImportExport() {
-    if (exportBtn) exportBtn.addEventListener('click', exportNotes);
+    if (exportBtn) exportBtn.addEventListener('click', toggleExportMenu);
     if (importBtn) importBtn.addEventListener('click', importNotes);
     if (importFileInput) importFileInput.addEventListener('change', handleFileImport);
+
+    const exportMenu = document.getElementById('export-menu');
+    if (exportMenu) {
+        exportMenu.querySelectorAll('.export-menu-item').forEach((item) => {
+            item.addEventListener('click', () => {
+                closeExportMenu();
+                exportNotes(item.dataset.format);
+            });
+        });
+    }
 }
 
-/** 导出全部笔记为 JSON 文件下载。 */
-function exportNotes() {
-    if (notes.length === 0) {
-        alert('没有笔记可导出');
-        return;
-    }
-    const exportData = {
-        version: '1.2.0',
-        exportTime: new Date().toISOString(),
-        noteCount: notes.length,
-        notes
-    };
-    const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' });
+/** 导出菜单：和右键菜单一样用 fixed 定位并按窗口夹回来，窄窗口下也不会跑出屏幕。 */
+function openExportMenu() {
+    const menu = document.getElementById('export-menu');
+    if (!menu || !exportBtn) return;
+    menu.classList.remove('hidden');
+    const anchor = exportBtn.getBoundingClientRect();
+    const box = menu.getBoundingClientRect();
+    const margin = 8;
+    let left = anchor.left;
+    let top = anchor.bottom + 4;
+    if (left + box.width > window.innerWidth - margin) left = window.innerWidth - box.width - margin;
+    if (left < margin) left = margin;
+    if (top + box.height > window.innerHeight - margin) top = anchor.top - box.height - 4;
+    if (top < margin) top = margin;
+    menu.style.left = `${left}px`;
+    menu.style.top = `${top}px`;
+}
+
+function closeExportMenu() {
+    const menu = document.getElementById('export-menu');
+    if (menu) menu.classList.add('hidden');
+}
+
+function toggleExportMenu() {
+    const menu = document.getElementById('export-menu');
+    if (!menu) return;
+    if (menu.classList.contains('hidden')) openExportMenu();
+    else closeExportMenu();
+}
+
+/** 触发一次下载（桌面端 app:// 下同样有效）。 */
+function downloadText(filename, text, mime) {
+    const blob = new Blob([text], { type: mime });
     const url = URL.createObjectURL(blob);
     const anchor = document.createElement('a');
     anchor.href = url;
-    anchor.download = `rfnoter-backup-${getCurrentDateString()}.json`;
+    anchor.download = filename;
     document.body.appendChild(anchor);
     anchor.click();
     document.body.removeChild(anchor);
     URL.revokeObjectURL(url);
-    showSaveIndicator('已导出笔记');
+}
+
+/**
+ * 导出全部笔记。
+ * format: 'json'（无损备份，默认）/ 'md'（给人读）/ 'csv'（给表格和脚本）
+ */
+function exportNotes(format = 'json') {
+    if (notes.length === 0) {
+        alert('没有笔记可导出');
+        return;
+    }
+    const text = format === 'md' ? notesToMarkdown(notes)
+        : format === 'csv' ? notesToCsv(notes)
+            : notesToJson(notes);
+    downloadText(exportFilename(format, getCurrentDateString()), text, mimeFor(format));
+    const label = format === 'md' ? 'Markdown' : format === 'csv' ? 'CSV' : 'JSON 备份';
+    showSaveIndicator(`已导出 ${label}（${notes.length} 条）`);
 }
 
 /** 校验导入文件的结构；保留 color='' 这类合法取值。 */
@@ -1259,6 +1331,26 @@ function closeHelpModal() {
 function bindEventListeners() {
     initSelectionMode();
     if (quickContinueBtn) quickContinueBtn.addEventListener('click', fillGapToNow);
+
+    // 时间微调：按钮只服务最高频的「结束时间」，两个输入框都支持 Alt+↑/↓
+    document.querySelectorAll('.time-step-btn[data-target]').forEach((btn) => {
+        btn.addEventListener('click', () => {
+            stepTimeInput(btn.dataset.target, Number(btn.dataset.delta));
+        });
+    });
+    const quickNowBtn = document.getElementById('quick-now-btn');
+    if (quickNowBtn) quickNowBtn.addEventListener('click', setEndTimeToNow);
+    ['quick-time-start', 'quick-time-end'].forEach((id) => {
+        const input = document.getElementById(id);
+        if (!input) return;
+        input.addEventListener('keydown', (event) => {
+            if (!event.altKey) return;
+            if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') return;
+            event.preventDefault();
+            stepTimeInput(id, event.key === 'ArrowUp' ? 5 : -5);
+        });
+    });
+
     quickAddForm.addEventListener('submit', quickAddNote);
     const quickTagEl = document.getElementById('quick-tag');
     if (quickTagEl) quickTagEl.addEventListener('input', () => { quickTagEl.value = trimTagToLimit(quickTagEl.value); });
@@ -1292,7 +1384,13 @@ function bindEventListeners() {
     document.getElementById('save-indicator').addEventListener('click', () => {
         if (lastSaveFailed) saveNotes();
     });
-    document.addEventListener('click', (e) => { if (!contextMenu.contains(e.target)) closeContextMenu(); });
+    document.addEventListener('click', (e) => {
+        if (!contextMenu.contains(e.target)) closeContextMenu();
+        // 导出菜单：点按钮本身要交给它的 toggle 处理，否则会"开了立刻关"
+        const menu = document.getElementById('export-menu');
+        const onButton = exportBtn && (exportBtn === e.target || exportBtn.contains(e.target));
+        if (menu && !menu.contains(e.target) && !onButton) closeExportMenu();
+    });
     noteModal.addEventListener('click', (e) => { if (e.target === noteModal) closeNoteModal(); });
     deleteModal.addEventListener('click', (e) => { if (e.target === deleteModal) closeDeleteModal(); });
     document.addEventListener('keydown', (e) => {
@@ -1304,6 +1402,7 @@ function bindEventListeners() {
         closeNoteModal();
         closeDeleteModal();
         closeContextMenu();
+        closeExportMenu();
         closeHelpModal();
         if (aiSummaryOpen) closeAISummaryModal();
         if (aiResultOpen) closeAIResultModal();

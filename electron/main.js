@@ -7,6 +7,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { createNoteStore } from './store.js';
+import { createLogger, describeError } from './logger.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.dirname(HERE);
@@ -47,6 +48,18 @@ let tray = null;
 let store = null;
 let activeHotkey = null;
 let quitting = false;
+
+// 日志尽早建立：userData 上面已经钉死了，所以从这一刻起任何异常都能落盘
+const logger = createLogger(path.join(app.getPath('userData'), 'logs'));
+
+// 主进程崩溃/未处理的 Promise 拒绝原本只会打到 stderr，
+// 桌面端用户看不到，等于没记录 —— 这两个是最该留下痕迹的
+process.on('uncaughtException', (err) => {
+    logger.error('主进程未捕获异常', err);
+});
+process.on('unhandledRejection', (reason) => {
+    logger.error('主进程未处理的 Promise 拒绝', reason);
+});
 
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -166,6 +179,21 @@ function createWindow() {
     if (saved?.maximized) mainWindow.maximize();
 
     mainWindow.loadURL(`${APP_ORIGIN}/index.html`);
+
+    // 渲染进程的问题原本只在 DevTools 里能看到，桌面端用户永远看不到。
+    // 这里把错误级别的控制台消息、加载失败、进程崩溃都记进日志文件。
+    mainWindow.webContents.on('console-message', (details) => {
+        const level = details?.level;
+        const isError = typeof level === 'string' ? level === 'error' : level >= 3;
+        if (isError) logger.error(`[渲染进程] ${details?.message ?? ''}`);
+    });
+    mainWindow.webContents.on('did-fail-load', (_e, code, desc, url) => {
+        logger.error(`页面加载失败 code=${code} ${desc} url=${url}`);
+    });
+    mainWindow.webContents.on('render-process-gone', (_e, details) => {
+        logger.error(`渲染进程退出 reason=${details?.reason} exitCode=${details?.exitCode}`);
+    });
+    mainWindow.on('unresponsive', () => logger.warn('窗口无响应'));
 
     // 关闭 = 收进托盘（否则全局热键就没意义了）
     mainWindow.on('close', (event) => {
@@ -304,6 +332,7 @@ function buildTray() {
             click: (item) => setAutoLaunch(item.checked)
         },
         { label: '打开数据目录', click: () => shell.openPath(store.dataDir) },
+        { label: '打开日志目录', click: () => shell.openPath(logger.dir) },
         { type: 'separator' },
         { label: '退出闪录', click: () => { quitting = true; app.quit(); } }
     ]));
@@ -314,13 +343,23 @@ function buildTray() {
 }
 
 function registerIpc() {
-    ipcMain.handle('notes:read', (_event, userId) => store.read(userId));
-    ipcMain.handle('notes:write', (_event, userId, notes) => store.write(userId, notes));
+    ipcMain.handle('notes:read', (_event, userId) => {
+        const result = store.read(userId);
+        if (!result?.ok) logger.error(`读取笔记失败 user=${userId}`, result?.error);
+        return result;
+    });
+    ipcMain.handle('notes:write', (_event, userId, notes) => {
+        const result = store.write(userId, notes);
+        if (!result?.ok) logger.error(`写入笔记失败 user=${userId}`, result?.error);
+        return result;
+    });
     ipcMain.handle('notes:list-user-ids', () => store.listUserIds());
     ipcMain.handle('app:open-data-dir', () => shell.openPath(store.dataDir));
+    ipcMain.handle('app:open-log-dir', () => shell.openPath(logger.dir));
     ipcMain.handle('app:info', () => ({
         version: app.getVersion(),
         dataDir: store.dataDir,
+        logsDir: logger.dir,
         hotkey: activeHotkey,
         platform: process.platform
     }));
@@ -341,6 +380,8 @@ async function bootstrap() {
     createWindow();
     registerHotkey();
 
+    logger.info(`启动 v${app.getVersion()}｜数据目录=${store.dataDir}｜热键=${activeHotkey ?? '(未注册)'}`);
+
     if (!IS_SELFTEST) buildTray();
 }
 
@@ -352,6 +393,12 @@ async function runSelfTest() {
     const check = (name, ok, extra = '') => results.push({ name, ok: !!ok, extra });
 
     await app.whenReady();
+
+    // 日志链路也要验：写进去了、读得出来、路径在隔离目录里
+    logger.info('自检：日志写入探针 LOGPROBE');
+    const probeText = fs.existsSync(logger.file) ? fs.readFileSync(logger.file, 'utf8') : '';
+    check('错误日志已落盘', probeText.includes('LOGPROBE'), logger.file);
+    check('日志目录在隔离的 userData 内', logger.dir.startsWith(app.getPath('userData')), logger.dir);
 
     // userData 已被隔离到临时目录，所以这里用的就是真实路径，只是不会碰到正式数据
     const dataDir = path.join(app.getPath('userData'), 'data');
@@ -367,8 +414,7 @@ async function runSelfTest() {
     check('store 读取不存在文件返回空', isolated.read('nobody')?.ok === true);
 
     const badFile = path.join(isolated.dataDir, 'notes_broken.json');
-    fs.writeFileSync(badFile, '{not json', 'utf8');
-    check('store 损坏文件返回错误而不是抛异常', isolated.read('broken')?.ok === false);
+    fs.writeFileSync(badFile, '{not json', 'utf8');    check('store 损坏文件返回错误而不是抛异常', isolated.read('broken')?.ok === false);
     fs.rmSync(badFile, { force: true });
 
     registerAppProtocol();

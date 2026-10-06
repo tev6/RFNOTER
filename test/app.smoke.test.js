@@ -6,6 +6,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { JSDOM } from 'jsdom';
+import { minutesToClock } from '../public/js/utils.js';
 
 const INDEX_HTML = fs.readFileSync(new URL('../public/index.html', import.meta.url), 'utf8');
 
@@ -61,6 +62,9 @@ async function bootApp({ serverNotes = [], localNotes = null, confirmAnswer = tr
     globalThis.localStorage = window.localStorage;
     globalThis.CSS = window.CSS;
     globalThis.DOMParser = window.DOMParser;
+    // app.js 会 new Event(...) 派发 input 事件；不注入的话用的是 Node 的 Event，
+    // jsdom 的 dispatchEvent 会拒绝它（"parameter 1 is not of type 'Event'"）
+    globalThis.Event = window.Event;
     globalThis.alert = window.alert;
     globalThis.confirm = window.confirm;
     globalThis.File = window.File;
@@ -233,14 +237,59 @@ test('导入 JSON：合并模式会追加新笔记并同步到服务端', async 
     assert.equal(state.serverNotes.length, 3, '导入后应写入服务端');
 });
 
-test('导出笔记会生成备份文件', async () => {
+test('导出：点导出按钮先出格式菜单，选 JSON 才生成备份文件', async () => {
     const { document, window, state } = await bootApp({ serverNotes: [makeNote({ id: 'n1' })] });
+
+    const menu = document.getElementById('export-menu');
+    assert.ok(menu.classList.contains('hidden'), '默认应该是收起的');
 
     document.getElementById('export-btn').dispatchEvent(new window.Event('click', { bubbles: true }));
     await flush(20);
+    assert.equal(menu.classList.contains('hidden'), false, '点一下应该弹出格式菜单');
+    assert.equal(state.exportedBlobs.length, 0, '只是弹菜单，不该立刻导出');
 
-    assert.equal(state.exportedBlobs.length, 1, '应生成一个导出文件');
-    assert.match(document.getElementById('save-indicator').textContent, /已导出/);
+    menu.querySelector('.export-menu-item[data-format="json"]')
+        .dispatchEvent(new window.Event('click', { bubbles: true }));
+    await flush(20);
+
+    assert.equal(state.exportedBlobs.length, 1, '选完才生成文件');
+    assert.match(document.getElementById('save-indicator').textContent, /JSON 备份/);
+    assert.equal(menu.classList.contains('hidden'), true, '选完应自动收起');
+});
+
+test('导出：Markdown 与 CSV 都能导出，且内容形态正确', async () => {
+    const notes = [
+        makeNote({ id: 'n1', date: '2026-05-14', content: '钓鱼', timeStart: '09:00', timeEnd: '10:30' }),
+        makeNote({ id: 'n2', date: '2026-05-14', content: 'CS', timeStart: '10:30', timeEnd: '11:00' })
+    ];
+    const { document, window, state } = await bootApp({ serverNotes: notes });
+
+    const exportAs = async (format) => {
+        document.getElementById('export-btn').dispatchEvent(new window.Event('click', { bubbles: true }));
+        await flush(20);
+        document.querySelector(`.export-menu-item[data-format="${format}"]`)
+            .dispatchEvent(new window.Event('click', { bubbles: true }));
+        await flush(20);
+    };
+
+    await exportAs('md');
+    await exportAs('csv');
+    assert.equal(state.exportedBlobs.length, 2);
+
+    const md = await state.exportedBlobs[0].text();
+    assert.match(md, /# 闪录笔记/);
+    assert.match(md, /## 2026-05-14/);
+    assert.match(md, /09:00 ~ 10:30/);
+    assert.match(md, /1小时30分钟/);
+
+    const csvBytes = new Uint8Array(await state.exportedBlobs[1].arrayBuffer());
+    assert.deepEqual([...csvBytes.slice(0, 3)], [0xEF, 0xBB, 0xBF],
+        'CSV 必须带 UTF-8 BOM，否则 Excel 打开是乱码（Blob.text() 按规范会吞掉 BOM，所以只能验字节）');
+    const csv = await state.exportedBlobs[1].text();
+    const lines = csv.split('\r\n');
+    assert.match(lines[0], /^日期,星期,开始,结束,时长\(分钟\),标题,标签,颜色,详情,记录时间$/);
+    assert.match(lines[1], /2026-05-14/);
+    assert.equal(lines.filter((l) => l.trim()).length, 3, '表头 + 两条数据');
 });
 
 test('AI 总结生成成功后，"重新生成 / 调整配置"仍然可用（不会双双关掉弹窗）', async () => {
@@ -593,4 +642,70 @@ test('惰性渲染：折叠分组里的笔记仍能被选中并参与 AI 总结'
     const preview = document.querySelectorAll('#selected-notes-preview > div');
     assert.equal(preview.length, 1, '未渲染的笔记也要能进入 AI 总结');
     assert.match(preview[0].textContent, /旧笔记/);
+});
+
+/* ---------------- v2.4.0：录入栏的时间微调 ---------------- */
+
+test('时间微调：±5 按钮按 5 分钟步进，并自动绕圈', async () => {
+    const { document, window } = await bootApp({ serverNotes: [] });
+    const end = document.getElementById('quick-time-end');
+    const click = (delta) => document
+        .querySelector(`.time-step-btn[data-target="quick-time-end"][data-delta="${delta}"]`)
+        .dispatchEvent(new window.Event('click', { bubbles: true }));
+
+    end.value = '10:00';
+    click(5);
+    assert.equal(end.value, '10:05');
+    click(-5);
+    assert.equal(end.value, '10:00');
+
+    // 跨天绕圈：23:58 + 5 应该变成 00:03
+    end.value = '23:58';
+    click(5);
+    assert.equal(end.value, '00:03');
+    // 反向绕圈：00:02 − 5 应该变成 23:57
+    end.value = '00:02';
+    click(-5);
+    assert.equal(end.value, '23:57');
+});
+
+test('时间微调：两个时间输入都支持 Alt+↑/↓', async () => {
+    const { document, window } = await bootApp({ serverNotes: [] });
+    const start = document.getElementById('quick-time-start');
+    start.value = '09:00';
+    start.dispatchEvent(new window.KeyboardEvent('keydown', {
+        key: 'ArrowUp', altKey: true, bubbles: true, cancelable: true
+    }));
+    assert.equal(start.value, '09:05');
+    start.dispatchEvent(new window.KeyboardEvent('keydown', {
+        key: 'ArrowDown', altKey: true, bubbles: true, cancelable: true
+    }));
+    assert.equal(start.value, '09:00');
+    // 不带 Alt 时不应该被我们拦截（交给原生行为）
+    start.dispatchEvent(new window.KeyboardEvent('keydown', {
+        key: 'ArrowUp', bubbles: true, cancelable: true
+    }));
+    assert.equal(start.value, '09:00');
+});
+
+test('时间微调：「现在」把结束时间设为当前时刻（向上取整到 5 分钟）', async () => {
+    const RealDate = globalThis.Date;
+    const FIXED = new RealDate(2026, 9, 6, 14, 3, 0); // 14:03 → 应取整到 14:05
+    class MockDateQuick extends RealDate {
+        constructor(...args) { super(...(args.length === 0 ? [FIXED.getTime()] : args)); }
+        static now() { return FIXED.getTime(); }
+    }
+    globalThis.Date = MockDateQuick;
+    try {
+        const { document, window } = await bootApp({ serverNotes: [] });
+        const end = document.getElementById('quick-time-end');
+        end.value = '03:00';
+        document.getElementById('quick-now-btn')
+            .dispatchEvent(new window.Event('click', { bubbles: true }));
+        assert.equal(end.value, minutesToClock(14 * 60 + 5));
+        // 点完应该把光标送回标题框，方便直接打字
+        assert.equal(document.activeElement.id, 'quick-content');
+    } finally {
+        globalThis.Date = RealDate;
+    }
 });

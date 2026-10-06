@@ -29,7 +29,7 @@
 | 属性 | 值 |
 |------|-----|
 | 项目名称 | RFNOTER（应用内显示名：闪录） |
-| 当前版本 | v2.3.0 |
+| 当前版本 | v2.4.0 |
 | 架构形式 | 模块化前端 + **双运行形态**：Electron 桌面端（默认）/ Express 网页端，共用同一套 `public/` |
 | 技术栈 | HTML5 + Tailwind CSS v3（本地 vendor）+ Font Awesome 4.7（本地 vendor）+ ES6 Modules + Electron 44 / Express 4 |
 | 数据存储 | 桌面端：`%APPDATA%\RFNOTER\data\`；网页端：`data/` 目录；两者都以 localStorage 作为离线副本 |
@@ -53,6 +53,9 @@
 - **v2.3.0**：按真实使用数据（1133 条 / 97 天）优化录入路径与渲染（见 §11.8）
   - 常用条目快捷条、时间接续提示与「补记空档」
   - 折叠分组惰性渲染：DOM 节点 24,812 → 1,391
+- **v2.4.0**：导出格式、时间微调、错误日志与 CI（见 §11.9）
+  - `public/js/exporters.js`（纯函数）、`electron/logger.js`（滚动文件日志）
+  - `.github/workflows/ci.yml`：Node 20/24 矩阵 + 桌面自检 + tag 打包
 
 ---
 
@@ -1006,7 +1009,24 @@ tailwind.config = {
 
 其余：`removeNoteElement(noteId, date)` 增加日期参数（折叠组里没有卡片节点，靠 DOM 找不到）；`scrollIntoView` 用 try 包住，避免滚动失败打断新增流程。
 
-### 11.9 扩展预留接口
+### 11.9 v2.4.0 主要变更（导出格式、时间微调、错误日志、CI）
+
+| 变更 | 说明 |
+|------|------|
+| **导出格式** | 新增 `public/js/exporters.js`：`notesToJson` / `notesToMarkdown` / `notesToCsv` / `exportFilename` / `mimeFor`，全是纯函数（不碰 DOM、不持状态），可以直接单测，也不受 ESM 模块缓存影响。CSV 带 **UTF-8 BOM + CRLF**（否则 Excel 打开中文乱码），字段按 RFC 4180 转义 |
+| **导出入口** | `#export-btn` 改为弹格式菜单（`#export-menu`，fixed 定位并按窗口夹回，与右键菜单同一手法），选完才真正导出 |
+| **时间微调** | `.time-step-btn`（±5 分钟，只作用于结束时间）+「现在」按钮 + 两个时间输入的 `Alt+↑/↓`。`setTimeInputTo` / `stepTimeInput` 统一走 `minutesToClock`（自带 24 小时取模，23:58 + 5 → 00:03） |
+| **错误日志** | 新增 `electron/logger.js`：`createLogger(dir)` 返回带滚动的文件日志（512KB × 3 份）。主进程装 `uncaughtException` / `unhandledRejection`；`createWindow` 里接 `console-message`（error 级）/ `did-fail-load` / `render-process-gone` / `unresponsive`；IPC 读写失败也记一笔。日志目录建不出来时静默降级为只写 stdout——**日志本身不能变成故障源** |
+| **日志入口** | 托盘菜单新增「打开日志目录」；`app:info` 增加 `logsDir`；preload 暴露 `openLogDir` |
+| **CI** | `.github/workflows/ci.yml`：`test`（Node 20/24 矩阵，验证 `engines: >=20.11` 的声明）、`selftest`（真实 Electron 跑自检）、`package`（仅 tag 或手动触发，产物上传为 artifact）。目标平台是 Windows，所以三个 job 都跑 `windows-latest`，避免平台差异带来的假信号 |
+
+**踩到的坑（勿回退）**：
+
+1. `Blob.prototype.text()` 按 WHATWG 规范会**吞掉开头的 BOM**，所以"CSV 到底有没有 BOM"只能验字节（`arrayBuffer()` 前三字节是否为 `EF BB BF`）；用 `startsWith('\uFEFF')` 一定失败。
+2. jsdom 测试环境必须注入 `globalThis.Event = window.Event`：app.js 里的 `new Event(...)` 否则拿到的是 Node 的 `Event`，jsdom 的 `dispatchEvent` 会拒绝（`parameter 1 is not of type 'Event'`）。
+3. 桌面端测试的假数据日期要用「今天」：非今天的分组默认折叠、卡片是惰性渲染的，断言 `.note-card` 数量会得到 0。
+
+### 11.10 扩展预留接口
 
 | 预留点 | 说明 |
 |--------|------|
@@ -1018,5 +1038,5 @@ tailwind.config = {
 
 ---
 
-> 📄 本文档版本：v2.3.0
+> 📄 本文档版本：v2.4.0
 > 最后更新：2026-10-06
