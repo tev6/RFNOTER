@@ -49,6 +49,15 @@ let store = null;
 let activeHotkey = null;
 let quitting = false;
 
+/**
+ * 每个 userId 最近一次已知的笔记条数。
+ *
+ * 用途：识别"这次写入会让笔记数腰斩"的危险动作（批量删除、导入时选替换），
+ * 从而在覆盖之前先强制留一份备份。放在内存里，不给每次写入增加读盘开销；
+ * 启动时用备份时顺便读到的条数做初值。
+ */
+const lastNoteCounts = new Map();
+
 // 日志尽早建立：userData 上面已经钉死了，所以从这一刻起任何异常都能落盘
 const logger = createLogger(path.join(app.getPath('userData'), 'logs'));
 
@@ -340,6 +349,7 @@ function buildTray() {
             click: (item) => setAutoLaunch(item.checked)
         },
         { label: '打开数据目录', click: () => shell.openPath(store.dataDir) },
+        { label: '打开备份目录', click: () => shell.openPath(store.backupsDir) },
         { label: '打开日志目录', click: () => shell.openPath(logger.dir) },
         { type: 'separator' },
         { label: '退出闪录', click: () => { quitting = true; app.quit(); } }
@@ -357,17 +367,44 @@ function registerIpc() {
         return result;
     });
     ipcMain.handle('notes:write', (_event, userId, notes) => {
+        // 笔记数大幅减少（批量删除、导入替换）时，先把当前这份强制备份下来。
+        // 用内存里的上次条数判断，不额外读盘；启动时已经把初始条数喂进来了。
+        const previous = lastNoteCounts.get(userId);
+        if (typeof previous === 'number' && previous >= 10
+            && Array.isArray(notes) && notes.length < previous * 0.5) {
+            const pre = store.backup(userId, { force: true });
+            if (pre.ok && !pre.skipped) {
+                logger.warn(`笔记数将从 ${previous} 降到 ${notes.length}，已先备份：${pre.file}`);
+            }
+        }
+
         const result = store.write(userId, notes);
-        if (!result?.ok) logger.error(`写入笔记失败 user=${userId}`, result?.error);
+        if (!result?.ok) {
+            logger.error(`写入笔记失败 user=${userId}`, result?.error);
+            return result;
+        }
+        lastNoteCounts.set(userId, Array.isArray(notes) ? notes.length : 0);
+
+        // 写成功之后再顺手备份一次（内部按小时限流，绝大多数写入会直接跳过）
+        const backup = store.backup(userId);
+        if (!backup.ok) logger.warn(`备份失败 user=${userId}：${backup.error}`);
+        else if (!backup.skipped) {
+            logger.info(`已备份 ${backup.file}（${backup.count} 条`
+                + `${backup.valid ? '' : '，内容无法解析'}）`
+                + `${backup.pruned ? `，清理旧备份 ${backup.pruned} 份` : ''}`);
+        }
         return result;
     });
     ipcMain.handle('notes:list-user-ids', () => store.listUserIds());
     ipcMain.handle('app:open-data-dir', () => shell.openPath(store.dataDir));
     ipcMain.handle('app:open-log-dir', () => shell.openPath(logger.dir));
+    ipcMain.handle('app:open-backup-dir', () => shell.openPath(store.backupsDir));
+    ipcMain.handle('app:backup-now', (_event, userId) => store.backup(userId, { force: true }));
     ipcMain.handle('app:info', () => ({
         version: app.getVersion(),
         dataDir: store.dataDir,
         logsDir: logger.dir,
+        backupsDir: store.backupsDir,
         hotkey: activeHotkey,
         platform: process.platform
     }));
@@ -387,6 +424,21 @@ async function bootstrap() {
     registerIpc();
     createWindow();
     registerHotkey();
+
+    // 启动时先给"最近用的那份笔记"留一份备份：万一是新版本引入的问题，
+    // 这一份就是"打开之前的样子"。内部有小时级限流，不会每次启动都堆一份。
+    const recent = store.listUserIds()[0];
+    if (recent) {
+        const first = store.backup(recent.userId);
+        if (first.ok && !first.skipped) {
+            logger.info(`启动备份 ${first.file}（${first.count} 条）`);
+        } else if (!first.ok) {
+            logger.warn(`启动备份失败：${first.error}`);
+        }
+        if (typeof first.count === 'number' && first.count > 0) {
+            lastNoteCounts.set(recent.userId, first.count);
+        }
+    }
 
     logger.info(`启动 v${app.getVersion()}｜数据目录=${store.dataDir}｜热键=${activeHotkey ?? '(未注册)'}`);
 
@@ -483,6 +535,34 @@ async function runSelfTest() {
         JSON.stringify(onDisk).slice(0, 200)
     );
     check('文件位于 userData 目录', path.resolve(store.dataDir) === path.resolve(dataDir), store.dataDir);
+
+    // 备份（B1）：走真实的 IPC 通道强制备份一次，确认文件真的落到了备份目录里
+    const backupResult = await win.webContents.executeJavaScript(
+        `window.rfnoter.backupNow(${JSON.stringify(userId)})`
+    );
+    check(
+        'IPC 备份能生成可解析的副本',
+        backupResult?.ok === true && backupResult.valid === true && backupResult.count === 1,
+        JSON.stringify(backupResult)
+    );
+    check(
+        '备份文件确实存在于备份目录',
+        Boolean(backupResult?.path) && fs.existsSync(backupResult.path)
+            && path.resolve(path.dirname(backupResult.path)) === path.resolve(store.backupsDir)
+            && path.resolve(store.backupsDir).startsWith(path.resolve(dataDir)),
+        String(backupResult?.path)
+    );
+    const backupInfo = await win.webContents.executeJavaScript('window.rfnoter.appInfo()');
+    check(
+        'app:info 暴露备份目录',
+        typeof backupInfo?.backupsDir === 'string' && backupInfo.backupsDir.includes('backups'),
+        String(backupInfo?.backupsDir)
+    );
+    check(
+        '写入会自动产生备份（无需手动触发）',
+        store.listBackups(userId).length >= 2,
+        `备份份数=${store.listBackups(userId).length}`
+    );
 
     const saveIndicator = await win.webContents.executeJavaScript(
         "document.getElementById('save-indicator').textContent"

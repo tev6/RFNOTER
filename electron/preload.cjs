@@ -13,6 +13,8 @@ contextBridge.exposeInMainWorld('rfnoter', {
     appInfo: () => ipcRenderer.invoke('app:info'),
     openDataDir: () => ipcRenderer.invoke('app:open-data-dir'),
     openLogDir: () => ipcRenderer.invoke('app:open-log-dir'),
+    openBackupDir: () => ipcRenderer.invoke('app:open-backup-dir'),
+    backupNow: (userId) => ipcRenderer.invoke('app:backup-now', userId),
     onQuickCapture: (callback) => {
         ipcRenderer.on('quick-capture', () => callback());
     }
