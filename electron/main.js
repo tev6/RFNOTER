@@ -659,6 +659,40 @@ async function runSelfTest() {
         JSON.stringify(historyProbe)
     );
 
+    // A5：删一条 → 撤销 → 回来（落盘数据也要跟着回滚）
+    const undoProbe = await win.webContents.executeJavaScript(`(async () => {
+        const count = () => document.querySelectorAll('.note-card').length;
+        const before = count();
+        const card = document.querySelector('.note-card');
+        const targetId = card ? card.dataset.noteId : null;
+        card?.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true }));
+        document.getElementById('delete-note-menu-btn')?.click();
+        document.getElementById('confirm-delete-btn')?.click();
+        await new Promise((resolve) => setTimeout(resolve, 700));
+        const afterDelete = count();
+        const toastShown = !document.getElementById('undo-toast')?.classList.contains('hidden');
+        document.getElementById('undo-toast-btn')?.click();
+        await new Promise((resolve) => setTimeout(resolve, 900));
+        return {
+            before, afterDelete, afterUndo: count(),
+            toastShown,
+            toastHidden: document.getElementById('undo-toast')?.classList.contains('hidden'),
+            restored: Boolean(targetId && document.querySelector('.note-card[data-note-id="' + targetId + '"]'))
+        };
+    })()`);
+    check(
+        '删除后能撤销，笔记回到列表',
+        undoProbe.before === 1 && undoProbe.afterDelete === 0 && undoProbe.toastShown
+            && undoProbe.afterUndo === 1 && undoProbe.restored && undoProbe.toastHidden === true,
+        JSON.stringify(undoProbe)
+    );
+    const afterUndoOnDisk = store.read(userId);
+    check(
+        '撤销的结果也落盘了',
+        afterUndoOnDisk.ok && afterUndoOnDisk.notes.length === 1,
+        JSON.stringify(afterUndoOnDisk).slice(0, 120)
+    );
+
     // v2.3.0 新增的三块：常用条目容器、接续提示、惰性渲染
     const quick = await win.webContents.executeJavaScript(`(() => {
         const text = document.getElementById('quick-continuity-text');

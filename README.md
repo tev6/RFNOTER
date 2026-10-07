@@ -198,12 +198,35 @@ node_modules\electron\dist\electron.exe . --screenshot=out.png
 > `does not provide an export named 'BrowserWindow'`。先 `set ELECTRON_RUN_AS_NODE=` 即可；
 > `RFNOTER.vbs` 已经处理了这一点。
 
+## 打包安装包
+
+```powershell
+npm test                                  # 全量测试
+npm run dist                              # 生成 dist\RFNOTER-Setup-<版本>.exe
+```
+
+**本机（中国大陆网络）必须先设镜像**，否则 `electron-builder` 会去 github.com 下载
+Electron 与 NSIS，直接超时失败：
+
+```powershell
+$env:ELECTRON_MIRROR = 'https://npmmirror.com/mirrors/electron/'
+$env:ELECTRON_BUILDER_BINARIES_MIRROR = 'https://npmmirror.com/mirrors/electron-builder-binaries/'
+npm run dist
+```
+
+打包脚本**不会**因为下载失败而报出显眼的错误——务必自己确认产物：
+
+```powershell
+(Get-Item 'dist\win-unpacked\RFNOTER.exe').VersionInfo.FileVersion   # 必须是本次版本号
+& 'dist\win-unpacked\RFNOTER.exe' --selftest                          # 自检通过数应随版本递增
+```
+
 ## 已知待办
 
 - 桌面端界面仍是网页版那一套（Tailwind 内联样式层 + 本地 vendor 脚本），没有做构建期 CSS 产物。
 - 网页端接口没有鉴权，多设备并发写入仍是「后写覆盖先写」；桌面端因为单实例锁基本不会遇到。
 - 导入导出为全量覆盖式，暂无按时间段导出。
-- 没有打包成安装包（自用场景下直接跑 `RFNOTER.vbs` 或桌面快捷方式即可）。
+- 打包依赖 github.com 的下载（本机不通，靠上面的镜像绕开），没有做离线化的构建缓存预置。
 
 ## License
 

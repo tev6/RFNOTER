@@ -1130,3 +1130,120 @@ test('A2 历史：Esc 先收历史面板，统计面板留在原处', async () =
     assert.equal(document.getElementById('history-modal').classList.contains('hidden'), true);
     assert.equal(document.getElementById('stats-modal').classList.contains('hidden'), false, '统计面板不该被一起关掉');
 });
+
+/* ---------------- v2.9.0：撤销删除（A5） ---------------- */
+
+/** 走完整流程删掉一条：右键 → 删除 → 确认（还要等删除动画走完）。 */
+async function deleteViaMenu(document, window, noteId) {
+    document.querySelector(`.note-card[data-note-id="${noteId}"]`)
+        .dispatchEvent(new window.MouseEvent('contextmenu', { bubbles: true, cancelable: true }));
+    document.getElementById('delete-note-menu-btn').dispatchEvent(new window.Event('click', { bubbles: true }));
+    document.getElementById('confirm-delete-btn').dispatchEvent(new window.Event('click', { bubbles: true }));
+    await flush(300);
+}
+
+test('A5 撤销：删一条后能恢复，列表和落盘数据都回滚', async () => {
+    const notes = [
+        makeNote({ id: 'u1', content: '要删的', createdAt: 2 }),
+        makeNote({ id: 'u2', content: '留着的', createdAt: 1 })
+    ];
+    const { document, window, state } = await bootApp({ serverNotes: notes });
+
+    await deleteViaMenu(document, window, 'u1');
+    assert.equal(state.serverNotes.length, 1, '已经删掉了');
+    assert.equal(document.getElementById('undo-toast').classList.contains('hidden'), false, '应出现撤销提示');
+    assert.match(document.getElementById('undo-toast-text').textContent, /已删除 1 条/);
+
+    document.getElementById('undo-toast-btn').dispatchEvent(new window.Event('click', { bubbles: true }));
+    await flush(400);
+
+    assert.equal(document.getElementById('undo-toast').classList.contains('hidden'), true, '撤销后提示要收起');
+    assert.ok(document.querySelector('.note-card[data-note-id="u1"]'), '卡片应该回来');
+    assert.equal(state.serverNotes.length, 2, '恢复的数据也要落盘');
+    assert.equal(state.serverNotes.find((n) => n.id === 'u1').content, '要删的', '内容要原样恢复');
+});
+
+test('A5 撤销：批量删除能整批恢复', async () => {
+    const notes = [1, 2, 3, 4].map((i) => makeNote({ id: `b${i}`, content: `第${i}条`, createdAt: 10 - i }));
+    const { document, window, state } = await bootApp({ serverNotes: notes });
+    const { clickCard } = await enterSelection(document, window);
+    clickCard('b1');
+    clickCard('b2');
+    clickCard('b3');
+    await flush(30);
+
+    document.getElementById('batch-delete-btn').dispatchEvent(new window.Event('click', { bubbles: true }));
+    await flush(200);
+    assert.equal(state.serverNotes.length, 1);
+    assert.match(document.getElementById('undo-toast-text').textContent, /已删除 3 条/);
+
+    document.getElementById('undo-toast-btn').dispatchEvent(new window.Event('click', { bubbles: true }));
+    await flush(400);
+    assert.equal(state.serverNotes.length, 4, '三条要一起回来');
+    assert.equal(document.querySelectorAll('.note-card').length, 4);
+});
+
+test('A5 撤销：连删两次能依次撤回（后进先出）', async () => {
+    const notes = [
+        makeNote({ id: 's1', content: 'A', createdAt: 3 }),
+        makeNote({ id: 's2', content: 'B', createdAt: 2 }),
+        makeNote({ id: 's3', content: 'C', createdAt: 1 })
+    ];
+    const { document, window, state } = await bootApp({ serverNotes: notes });
+
+    await deleteViaMenu(document, window, 's1');
+    await deleteViaMenu(document, window, 's2');
+    assert.equal(state.serverNotes.length, 1);
+    assert.match(document.getElementById('undo-toast-text').textContent, /已删除 2 条/);
+
+    const undoBtn = document.getElementById('undo-toast-btn');
+    undoBtn.dispatchEvent(new window.Event('click', { bubbles: true }));
+    await flush(300);
+    assert.ok(state.serverNotes.some((n) => n.id === 's2'), '先回来的是最后删的那条');
+    assert.ok(!state.serverNotes.some((n) => n.id === 's1'), 's1 还没撤');
+    assert.equal(document.getElementById('undo-toast').classList.contains('hidden'), false, '还有待撤销的，提示要留着');
+
+    undoBtn.dispatchEvent(new window.Event('click', { bubbles: true }));
+    await flush(300);
+    assert.equal(state.serverNotes.length, 3);
+    assert.equal(document.getElementById('undo-toast').classList.contains('hidden'), true);
+});
+
+test('A5 撤销：明确关掉提示后，Ctrl+Z 也不该再恢复', async () => {
+    const notes = [makeNote({ id: 'x1', createdAt: 2 }), makeNote({ id: 'x2', createdAt: 1 })];
+    const { document, window, state } = await bootApp({ serverNotes: notes });
+    await deleteViaMenu(document, window, 'x1');
+
+    document.getElementById('undo-toast-close').dispatchEvent(new window.Event('click', { bubbles: true }));
+    await flush(20);
+    assert.equal(document.getElementById('undo-toast').classList.contains('hidden'), true);
+
+    document.getElementById('notes-container')
+        .dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', ctrlKey: true, bubbles: true }));
+    await flush(100);
+    assert.equal(state.serverNotes.length, 1, '用户已经明确表示不要撤销了');
+});
+
+test('A5 撤销：Ctrl+Z 能撤销，但焦点在输入框时让给浏览器', async () => {
+    const notes = [makeNote({ id: 'k1', createdAt: 2 }), makeNote({ id: 'k2', createdAt: 1 })];
+    const { document, window, state } = await bootApp({ serverNotes: notes });
+    await deleteViaMenu(document, window, 'k1');
+
+    // 输入框里的 Ctrl+Z 是"撤销我打的字"，不该被我们抢走
+    document.getElementById('quick-content')
+        .dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', ctrlKey: true, bubbles: true }));
+    await flush(50);
+    assert.equal(state.serverNotes.length, 1, '输入框里的 Ctrl+Z 不应该恢复笔记');
+
+    document.getElementById('notes-container')
+        .dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', ctrlKey: true, bubbles: true }));
+    await flush(300);
+    assert.equal(state.serverNotes.length, 2);
+});
+
+test('A5 撤销：确认文案不能再说"无法撤销"', async () => {
+    const { document } = await bootApp({ serverNotes: [makeNote({ id: 'w1' })] });
+    const text = document.getElementById('delete-modal').textContent;
+    assert.ok(!text.includes('无法撤销'), '已经有撤销了，再这么写就是骗人');
+    assert.match(text, /可以撤销/);
+});

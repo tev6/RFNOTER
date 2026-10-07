@@ -95,6 +95,10 @@ const historyModal = document.getElementById('history-modal');
 const historyContent = document.getElementById('history-content');
 const historyTitle = document.getElementById('history-title');
 const closeHistoryBtn = document.getElementById('close-history-btn');
+const undoToast = document.getElementById('undo-toast');
+const undoToastText = document.getElementById('undo-toast-text');
+const undoToastBtn = document.getElementById('undo-toast-btn');
+const undoToastClose = document.getElementById('undo-toast-close');
 
 /**
  * 统计面板的界面状态（范围、口径、展开了哪些明细、时间轴看哪天）。
@@ -513,9 +517,13 @@ async function applyBatchTag() {
 async function batchDeleteSelected() {
     const count = selectedNotes.size;
     if (count === 0) return;
-    if (!confirm(`确定删除选中的 ${count} 条笔记吗？删除后无法撤销。`)) return;
-    const { notes: next, removed } = batchRemove(notes, [...selectedNotes]);
+    if (!confirm(`确定删除选中的 ${count} 条笔记吗？删除后 ${UNDO_WINDOW_MS / 1000} 秒内可以撤销。`)) return;
+    const ids = [...selectedNotes];
+    // batchRemove 只返回删除的条数，撤销要的是笔记本身，所以先自己挑出来
+    const removedNotes = notes.filter((note) => ids.includes(note.id));
+    const { notes: next, removed } = batchRemove(notes, ids);
     setNotes(next);
+    recordDeletion(removedNotes);
     clearSelection();
     exitSelectionMode();
     renderNotes();
@@ -1240,6 +1248,7 @@ function deleteNote() {
         const index = notes.findIndex(note => note.id === noteId);
         if (index === -1) return;
         const [removed] = notes.splice(index, 1);
+        recordDeletion([removed]);
         saveNotes();
         // 把日期传下去：折叠分组里的卡片可能还没渲染，靠 DOM 找不到
         removeNoteElement(noteId, removed.date);
@@ -1258,6 +1267,89 @@ function deleteNote() {
     }
     closeDeleteModal();
     closeContextMenu();
+}
+
+/* ------------------------------------------------------------------ */
+/* 撤销删除（A5）                                                      */
+/* ------------------------------------------------------------------ */
+
+/**
+ * 撤销窗口。比普通提示长一些——"发现删错了"往往要隔几秒才反应过来。
+ * 批量删除的确认文案里也用这个数字，所以别再写字面量。
+ */
+const UNDO_WINDOW_MS = 10000;
+
+/**
+ * 待撤销的删除，后进先出。
+ *
+ * 存的是**副本**：恢复时要把它们并回 notes，而 notes 是被整体替换的（setNotes），
+ * 留着原引用容易被后续操作改到。
+ * 不记"原来在第几个"——显示顺序由 createdAt 决定，并回去位置自然就对。
+ */
+let undoStack = [];
+let undoTimer = null;
+
+/** 记下一次删除，让它在接下来几秒内可撤销。 */
+function recordDeletion(removedNotes) {
+    if (!undoToast || !removedNotes || removedNotes.length === 0) return;
+    undoStack.push({ notes: removedNotes.map((note) => ({ ...note })) });
+    renderUndoToast();
+    // 每来一次新的删除就续期：这一窗内的删除都能依次撤回
+    clearTimeout(undoTimer);
+    undoTimer = setTimeout(commitUndo, UNDO_WINDOW_MS);
+}
+
+function undoTotalCount() {
+    return undoStack.reduce((sum, entry) => sum + entry.notes.length, 0);
+}
+
+function renderUndoToast() {
+    if (!undoToast) return;
+    if (undoStack.length === 0) {
+        undoToast.classList.add('hidden');
+        return;
+    }
+    undoToastText.textContent = `已删除 ${undoTotalCount()} 条笔记`;
+    undoToast.classList.remove('hidden');
+}
+
+/** 关掉撤销提示 = 认了这些删除，之后只能从备份目录里找。 */
+function commitUndo() {
+    clearTimeout(undoTimer);
+    undoTimer = null;
+    undoStack = [];
+    if (undoToast) undoToast.classList.add('hidden');
+}
+
+async function undoLastDeletion() {
+    const entry = undoStack.pop();
+    if (!entry) return;
+    setNotes([...notes, ...entry.notes]);
+    renderNotes();
+    renderQuickPicks();
+    updateQuickContinuity();
+    updateEmptyState();
+    // 先等保存结束再提示，否则会被 saveNotes 自己的"已保存"盖掉
+    await saveNotes();
+    showSaveIndicator(`已恢复 ${entry.notes.length} 条笔记`);
+    renderUndoToast();
+    if (undoStack.length === 0) clearTimeout(undoTimer);
+}
+
+function initUndo() {
+    if (undoToastBtn) undoToastBtn.addEventListener('click', () => { undoLastDeletion(); });
+    if (undoToastClose) undoToastClose.addEventListener('click', commitUndo);
+    document.addEventListener('keydown', (event) => {
+        if (event.key !== 'z' && event.key !== 'Z') return;
+        if (!(event.ctrlKey || event.metaKey) || event.shiftKey) return;
+        // 输入框里的 Ctrl+Z 是"撤销我打的字"，交给浏览器
+        const target = event.target;
+        const tag = (target.tagName || '').toLowerCase();
+        if (tag === 'input' || tag === 'textarea' || target.isContentEditable) return;
+        if (undoStack.length === 0) return;
+        event.preventDefault();
+        undoLastDeletion();
+    });
 }
 
 function duplicateNote() {
@@ -1414,6 +1506,7 @@ function bindEventListeners() {
     initSearch();
     initStats();
     initHistory();
+    initUndo();
     if (quickContinueBtn) quickContinueBtn.addEventListener('click', fillGapToNow);
 
     // 时间微调：按钮只服务最高频的「结束时间」，两个输入框都支持 Alt+↑/↓
