@@ -29,7 +29,7 @@
 | 属性 | 值 |
 |------|-----|
 | 项目名称 | RFNOTER（应用内显示名：闪录） |
-| 当前版本 | v2.7.0 |
+| 当前版本 | v2.8.0 |
 | 架构形式 | 模块化前端 + **双运行形态**：Electron 桌面端（默认）/ Express 网页端，共用同一套 `public/` |
 | 技术栈 | HTML5 + Tailwind CSS v3（本地 vendor）+ Font Awesome 4.7（本地 vendor）+ ES6 Modules + Electron 44 / Express 4 |
 | 数据存储 | 桌面端：`%APPDATA%\RFNOTER\data\`；网页端：`data/` 目录；两者都以 localStorage 作为离线副本 |
@@ -65,6 +65,9 @@
 - **v2.7.0**：自动备份与轮转（见 §11.12）
   - `store.js`：`backup` / `listBackups` / `pruneBackups`
   - 双层轮转：最近 24 份 + 最近 30 天每天一份；危险写入前强制备份
+- **v2.8.0**：点标题看历史（A2）
+  - `stats.js`：`activityHistory` / `activitiesInOrder`；`stats-view.js`：`renderActivityHistory`
+  - `render.js`：`expandDateGroup(date)` —— 跳转前必须展开折叠分组（惰性渲染下卡片没有 DOM）
 
 ---
 
@@ -1095,5 +1098,5 @@ tailwind.config = {
 
 ---
 
-> 📄 本文档版本：v2.6.0
+> 📄 本文档版本：v2.8.0
 > 最后更新：2026-10-06

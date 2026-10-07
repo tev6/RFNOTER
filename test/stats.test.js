@@ -7,7 +7,8 @@ import {
     normalizeText, splitActivities, canonicalTitle, noteDurationMinutes,
     similarity, isSameActivity, clusterActivities, rankActivities,
     hourHistogram, dailyBuckets, timelineBlocks, overview,
-    filterByRange, heatmapDays, formatMinutes, ALLOCATION
+    filterByRange, heatmapDays, formatMinutes, ALLOCATION,
+    activityHistory, activitiesInOrder
 } from '../public/js/stats.js';
 
 const note = (overrides = {}) => ({
@@ -260,4 +261,74 @@ test('时长文案', () => {
     assert.equal(formatMinutes(45), '45分钟');
     assert.equal(formatMinutes(60), '1小时');
     assert.equal(formatMinutes(90), '1小时30分钟');
+});
+
+/* ---------------- A2：一件事的历史 ---------------- */
+
+test('活动顺序：activitiesInOrder 保留书写顺序，splitActivities 是排序过的', () => {
+    assert.deepEqual(activitiesInOrder('吃饭+B站'), ['吃饭', 'b站']);
+    assert.deepEqual(splitActivities('吃饭+B站'), ['b站', '吃饭']);
+    assert.deepEqual(activitiesInOrder('Ａ ＋ Ｂ'), ['a', 'b']);
+});
+
+test('历史：按同一套归并规则找出所有记录，新→旧排列', () => {
+    const notes = [
+        note({ id: 'h1', date: '2026-05-10', timeStart: '09:00', timeEnd: '10:00', content: '30图小河道表水' }),
+        note({ id: 'h2', date: '2026-05-12', timeStart: '14:00', timeEnd: '15:00', content: '30图小河道' }),
+        note({ id: 'h3', date: '2026-05-14', timeStart: '20:00', timeEnd: '21:00', content: 'B站+30图小河道表水' }),
+        note({ id: 'h4', date: '2026-05-14', timeStart: '22:00', timeEnd: '22:30', content: '完全无关的事' })
+    ];
+    const history = activityHistory(notes, '30图小河道表水');
+
+    assert.equal(history.count, 3, '无关的那条不该进来');
+    assert.deepEqual(history.records.map((r) => r.id), ['h3', 'h2', 'h1'], '新 → 旧');
+    assert.equal(history.days, 3);
+    assert.equal(history.firstDate, '2026-05-10');
+    assert.equal(history.lastDate, '2026-05-14');
+    // 60 + 60 + 30（多段那条均摊一半）
+    assert.equal(history.minutes, 150);
+});
+
+test('历史：多段笔记按均摊记时，同时保留整条时长供界面说明', () => {
+    const notes = [
+        note({ id: 'm1', date: '2026-05-14', timeStart: '20:00', timeEnd: '21:00', content: 'B站+吃饭' })
+    ];
+    const history = activityHistory(notes, '吃饭');
+    assert.equal(history.count, 1);
+    assert.equal(history.minutes, 30, '均摊一半');
+    assert.equal(history.records[0].minutes, 30);
+    assert.equal(history.records[0].fullMinutes, 60);
+    assert.equal(history.records[0].segments, 2);
+    // 必须和排行口径一致，否则同一个活动在两处显示的时长会互相矛盾
+    const ranked = rankActivities(notes);
+    assert.equal(ranked.find((c) => c.label === '吃饭').minutes, history.minutes);
+});
+
+test('历史：给出被归并的多种写法及各自时长', () => {
+    const notes = [
+        note({ id: 'v1', date: '2026-05-10', timeStart: '09:00', timeEnd: '10:00', content: '30图小河道表水' }),
+        note({ id: 'v2', date: '2026-05-12', timeStart: '14:00', timeEnd: '15:00', content: '小河道表水' })
+    ];
+    const history = activityHistory(notes, '30图小河道表水');
+    assert.equal(history.count, 2);
+    assert.deepEqual(history.variants.map((v) => v.label), ['30图小河道表水', '小河道表水']);
+    assert.equal(history.variants[0].minutes, 60);
+});
+
+test('历史：完全不相干的活动不会被并进来', () => {
+    const notes = [
+        note({ id: 'x1', date: '2026-05-14', timeStart: '09:00', timeEnd: '10:00', content: '终末地' }),
+        note({ id: 'x2', date: '2026-05-14', timeStart: '11:00', timeEnd: '12:00', content: '出门和亲戚吃饭，回家，上花生课，坐地铁，路上终末地' })
+    ];
+    const history = activityHistory(notes, '终末地');
+    assert.equal(history.count, 1, '顺带提一句终末地的那条不该算进来');
+    assert.deepEqual(history.records.map((r) => r.id), ['x1']);
+});
+
+test('历史：空标签、空数据、没有匹配都不炸', () => {
+    assert.equal(activityHistory([], '钓鱼').count, 0);
+    assert.equal(activityHistory([note()], '').count, 0);
+    // 默认那条笔记内容是「钓鱼」，所以这里用一个确实不存在的活动名
+    assert.deepEqual(activityHistory([note()], '完全不存在的事').records, []);
+    assert.equal(activityHistory([note()], '完全不存在的事').minutes, 0);
 });

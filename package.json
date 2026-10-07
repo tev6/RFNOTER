@@ -1,6 +1,6 @@
 {
   "name": "rfnoter",
-  "version": "2.7.0",
+  "version": "2.8.0",
   "description": "Real Fast Noter - A lightweight, fast note-taking app with AI summary support",
   "type": "module",
   "main": "electron/main.js",

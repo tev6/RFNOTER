@@ -97,7 +97,9 @@ function renderRanking(data) {
             <div class="py-1.5" data-stats-row="${index}" data-label="${escapeHTML(entry.label)}">
                 <div class="flex items-center gap-3 text-sm">
                     <span class="w-6 text-right text-xs text-gray-400 tabular-nums">${index + 1}</span>
-                    <span class="flex-1 truncate text-gray-700">${escapeHTML(entry.label)}${toggle}</span>
+                    <button type="button" data-stats-action="history" data-label="${escapeHTML(entry.label)}"
+                        title="看这件事的历史：都在什么时候做的"
+                        class="flex-1 truncate text-left text-gray-700 hover:text-primary hover:underline transition-colors duration-150">${escapeHTML(entry.label)}</button>${toggle}
                     <span class="w-24 text-right font-medium text-gray-800 tabular-nums">${escapeHTML(formatMinutes(entry.minutes))}</span>
                     <span class="w-14 text-right text-xs text-gray-400 tabular-nums">${entry.count} 次</span>
                 </div>
@@ -219,4 +221,69 @@ export function renderStats(container, data) {
         renderHourly(data),
         renderHeatmap(data)
     ].join('<div class="border-t border-gray-100 my-5"></div>');
+}
+
+/** 把「一件事的历史」画进 container（A2）。 */
+export function renderActivityHistory(container, data) {
+    if (!container) return;
+    if (!data || data.count === 0) {
+        container.innerHTML = '<p class="text-sm text-gray-500">这件事还没有任何记录。</p>';
+        return;
+    }
+
+    const summary = [
+        statCard('出现次数', `${data.count} 次`),
+        statCard('合计时长', formatMinutes(data.minutes)),
+        statCard('平均每次', formatMinutes(data.avgMinutes)),
+        statCard('跨越天数', `${data.days} 天`)
+    ].join('');
+
+    // 写法不同但被归并到一起的，要交代清楚，否则用户会以为「我没写过这个」
+    const variants = data.variants.length > 1
+        ? `<div class="mt-3 text-xs text-gray-500">
+                统计里合并了 ${data.variants.length} 种写法：${data.variants.map((v) =>
+                    `<span class="inline-block bg-gray-100 rounded px-1.5 py-0.5 mr-1">${escapeHTML(v.label)} · ${escapeHTML(formatMinutes(v.minutes))}</span>`
+                ).join('')}
+           </div>`
+        : '';
+
+    // 从「多段笔记」的卡片进来时要先挑一段，否则没有"整条的历史"这回事
+    const choices = Array.isArray(data.choices) && data.choices.length > 1
+        ? `<div class="mt-4 flex items-center flex-wrap gap-2 text-xs text-gray-500">
+                <span>这条笔记同时记了多件事，看哪一件：</span>
+                ${data.choices.map((choice) => {
+                    const active = choice === data.label;
+                    return `<button type="button" data-history-label="${escapeHTML(choice)}"
+                        class="px-2 py-0.5 rounded-full transition-colors duration-150
+                               ${active ? 'bg-primary text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}">
+                        ${escapeHTML(choice)}</button>`;
+                }).join('')}
+           </div>`
+        : '';
+
+    const rows = data.records.map((record) => {
+        // 多段笔记要标出"这一段只按均摊算"，否则时长和卡片上看到的对不上
+        const shareHint = record.segments > 1
+            ? `<span class="ml-2 text-xs text-amber-600 whitespace-nowrap">多段笔记 ${record.segments} 段 · 本段 ${escapeHTML(formatMinutes(record.minutes))}，整条 ${escapeHTML(formatMinutes(record.fullMinutes))}</span>`
+            : '';
+        const tag = record.tag ? `<span class="tag ml-2">${escapeHTML(record.tag)}</span>` : '';
+        return `
+            <button type="button" data-history-note-id="${escapeHTML(record.id)}"
+                class="w-full text-left px-3 py-2 rounded hover:bg-primary/5 transition-colors duration-150 note-row-layout items-center">
+                <span class="col-span-3 md:col-span-2 text-sm text-gray-500 whitespace-nowrap">${escapeHTML(record.date)}</span>
+                <span class="col-span-3 md:col-span-2 text-sm whitespace-nowrap">${escapeHTML(record.timeStart)} ~ ${escapeHTML(record.timeEnd)}</span>
+                <span class="col-span-2 text-sm font-medium tabular-nums whitespace-nowrap">${escapeHTML(formatMinutes(record.minutes))}</span>
+                <span class="col-span-4 md:col-span-6 truncate text-sm text-gray-700">${escapeHTML(record.content)}${tag}${shareHint}</span>
+            </button>`;
+    }).join('');
+
+    container.innerHTML = `
+        <div class="grid grid-cols-2 md:grid-cols-4 gap-3">${summary}</div>
+        ${choices}
+        ${variants}
+        <div class="flex items-center justify-between mt-5 mb-2">
+            <h3 class="text-sm font-medium text-gray-700">全部记录（新 → 旧）</h3>
+            <span class="text-xs text-gray-400">点任意一行可跳到列表里定位那条笔记</span>
+        </div>
+        <div class="space-y-0.5">${rows}</div>`;
 }

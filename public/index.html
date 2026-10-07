@@ -524,6 +524,21 @@
         </div>
     </div>
 
+    <!-- 一件事的历史：内容由 stats-view.js 渲染（A2） -->
+    <div id="history-modal" class="fixed inset-0 z-50 hidden overflow-y-auto bg-gray-900/50">
+        <div class="container mx-auto px-4 py-6">
+            <div class="bg-white rounded-lg shadow-xl">
+                <div class="flex items-center justify-between px-6 py-4 border-b border-gray-200">
+                    <h2 id="history-title" class="text-lg font-medium text-gray-900">历史</h2>
+                    <button id="close-history-btn" class="text-gray-500 hover:text-gray-700 transition-colors duration-150" title="关闭（Esc）">
+                        <i class="fa fa-times"></i>
+                    </button>
+                </div>
+                <div id="history-content" class="px-6 py-5"></div>
+            </div>
+        </div>
+    </div>
+
     <!-- 批量改标签：只在选择模式下、且有选中项时才会打开 -->
     <div id="batch-tag-modal" class="fixed inset-0 z-50 hidden overflow-y-auto">
         <div class="flex items-center justify-center min-h-screen px-4">
@@ -599,6 +614,7 @@
     <div id="context-menu" class="hidden fixed z-50 w-48 bg-white/70 backdrop-blur-md rounded-md shadow-lg py-1 animate-slide-in">
         <button class="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 transition-colors duration-150" id="edit-note-menu-btn"><i class="fa fa-pencil mr-2"></i> 编辑</button>
         <button class="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 transition-colors duration-150" id="duplicate-note-menu-btn"><i class="fa fa-clone mr-2"></i> 复制</button>
+        <button class="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 transition-colors duration-150" id="history-note-menu-btn"><i class="fa fa-history mr-2"></i> 看这件事的历史</button>
         <div class="relative group">
             <button class="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 transition-colors duration-150 flex items-center justify-between" id="color-menu-btn">
                 <span><i class="fa fa-tag mr-2"></i> 颜色标记</span>

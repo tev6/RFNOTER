@@ -1037,3 +1037,96 @@ test('A1 统计：关掉面板不会动到笔记数据', async () => {
     assert.equal(state.serverNotes.length, 1);
     assert.equal(state.postCount, 0, '看统计不该触发任何保存');
 });
+
+/* ---------------- v2.8.0：点标题看历史（A2） ---------------- */
+
+/** 在某张卡片上呼出右键菜单。 */
+function openMenuOn(document, window, noteId) {
+    const card = document.querySelector(`.note-card[data-note-id="${noteId}"]`);
+    card.dispatchEvent(new window.MouseEvent('contextmenu', { bubbles: true, clientX: 100, clientY: 100 }));
+}
+
+test('A2 历史：点统计里的标题能打开这件事的历史', async () => {
+    const notes = [
+        makeNote({ id: 'n1', content: 'CS', timeStart: '09:00', timeEnd: '10:00', createdAt: 3 }),
+        makeNote({ id: 'n2', content: 'CS', timeStart: '14:00', timeEnd: '15:00', createdAt: 2 }),
+        makeNote({ id: 'n3', content: 'B站', timeStart: '16:00', timeEnd: '17:00', createdAt: 1 })
+    ];
+    const { document, window } = await bootApp({ serverNotes: notes });
+    await openStatsToday(document, window);
+
+    const row = rankingRow(document, 'cs');
+    assert.ok(row, '排行里应该有 cs');
+    row.querySelector('[data-stats-action="history"]')
+        .dispatchEvent(new window.Event('click', { bubbles: true }));
+    await flush(30);
+
+    assert.equal(document.getElementById('history-modal').classList.contains('hidden'), false, '历史面板应打开');
+    assert.match(document.getElementById('history-title').textContent, /cs/);
+    const text = document.getElementById('history-content').textContent;
+    assert.match(text, /2 次/, 'CS 出现过两次');
+    assert.match(text, /2小时/, '合计 120 分钟');
+    assert.equal(document.querySelectorAll('[data-history-note-id]').length, 2, '两条记录都在');
+});
+
+test('A2 历史：点记录能跳到列表里那条笔记（哪怕它在折叠的分组里）', async () => {
+    const notes = [
+        makeNote({ id: 'today-note', content: 'CS', timeStart: '09:00', timeEnd: '10:00', createdAt: 2 }),
+        makeNote({ id: 'old-note', date: '2026-01-05', content: 'CS', timeStart: '09:00', timeEnd: '10:00', createdAt: 1 })
+    ];
+    const { document, window } = await bootApp({ serverNotes: notes });
+
+    // 旧日期默认折叠 → 那张卡片根本没有 DOM，这正是跳转要处理的路径
+    assert.equal(document.querySelector('.note-card[data-note-id="old-note"]'), null, '前提：旧分组是折叠的');
+
+    openMenuOn(document, window, 'today-note');
+    document.getElementById('history-note-menu-btn').dispatchEvent(new window.Event('click', { bubbles: true }));
+    await flush(30);
+    assert.equal(document.getElementById('history-modal').classList.contains('hidden'), false);
+
+    const oldRow = document.querySelector('[data-history-note-id="old-note"]');
+    assert.ok(oldRow, '历史里应该有旧的那条');
+    oldRow.dispatchEvent(new window.Event('click', { bubbles: true }));
+    await flush(30);
+
+    assert.equal(document.getElementById('history-modal').classList.contains('hidden'), true, '跳转后历史面板收起');
+    const card = document.querySelector('.note-card[data-note-id="old-note"]');
+    assert.ok(card, '折叠的分组应被展开，卡片被创建出来');
+    assert.ok(card.style.backgroundColor, '应短暂高亮一下');
+});
+
+test('A2 历史：多段笔记要先挑一段，并且可以切换', async () => {
+    const notes = [makeNote({ id: 'n1', content: 'B站+吃饭', timeStart: '12:00', timeEnd: '13:00' })];
+    const { document, window } = await bootApp({ serverNotes: notes });
+
+    openMenuOn(document, window, 'n1');
+    document.getElementById('history-note-menu-btn').dispatchEvent(new window.Event('click', { bubbles: true }));
+    await flush(30);
+
+    // 没有「整条的历史」这回事，默认看书写顺序里的第一个活动
+    assert.match(document.getElementById('history-title').textContent, /b站/);
+    const chips = [...document.querySelectorAll('[data-history-label]')];
+    assert.deepEqual(chips.map((c) => c.dataset.historyLabel), ['b站', '吃饭'], '按书写顺序给选项');
+    assert.match(document.getElementById('history-content').textContent, /多段笔记 2 段/);
+
+    chips[1].dispatchEvent(new window.Event('click', { bubbles: true }));
+    await flush(30);
+    assert.match(document.getElementById('history-title').textContent, /吃饭/);
+    assert.equal(document.querySelectorAll('[data-history-note-id]').length, 1);
+});
+
+test('A2 历史：Esc 先收历史面板，统计面板留在原处', async () => {
+    const notes = [makeNote({ id: 'n1', content: 'CS', timeStart: '09:00', timeEnd: '10:00' })];
+    const { document, window } = await bootApp({ serverNotes: notes });
+    await openStatsToday(document, window);
+
+    rankingRow(document, 'cs').querySelector('[data-stats-action="history"]')
+        .dispatchEvent(new window.Event('click', { bubbles: true }));
+    await flush(30);
+    assert.equal(document.getElementById('history-modal').classList.contains('hidden'), false);
+
+    document.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    await flush(20);
+    assert.equal(document.getElementById('history-modal').classList.contains('hidden'), true);
+    assert.equal(document.getElementById('stats-modal').classList.contains('hidden'), false, '统计面板不该被一起关掉');
+});

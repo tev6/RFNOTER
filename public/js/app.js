@@ -14,13 +14,14 @@ import { rangeIds, sortForDisplay, batchApplyTag, batchRemove, collectTags, TAG_
 import { parseQuery, matchNote, resultLabel } from './search.js';
 import {
     filterByRange, rankActivities, hourHistogram, dailyBuckets,
-    timelineBlocks, overview, heatmapDays, ALLOCATION
+    timelineBlocks, overview, heatmapDays, ALLOCATION,
+    activityHistory, activitiesInOrder
 } from './stats.js';
-import { renderStats } from './stats-view.js';
+import { renderStats, renderActivityHistory } from './stats-view.js';
 import { CONFIG, STORE_LABEL, SAFE_ID_RE } from './config.js';
 import {
     initRender, setRenderHooks, renderNotes, renderNoteElement,
-    removeNoteElement, updateEmptyState, setDateGroupCollapsed
+    removeNoteElement, updateEmptyState, setDateGroupCollapsed, expandDateGroup
 } from './render.js';
 import {
     notes, currentNoteId, lastEndTime, selectedNotes,
@@ -90,6 +91,10 @@ const statsBtn = document.getElementById('stats-btn');
 const statsModal = document.getElementById('stats-modal');
 const statsContent = document.getElementById('stats-content');
 const closeStatsBtn = document.getElementById('close-stats-btn');
+const historyModal = document.getElementById('history-modal');
+const historyContent = document.getElementById('history-content');
+const historyTitle = document.getElementById('history-title');
+const closeHistoryBtn = document.getElementById('close-history-btn');
 
 /**
  * 统计面板的界面状态（范围、口径、展开了哪些明细、时间轴看哪天）。
@@ -763,10 +768,92 @@ function handleStatsClick(event) {
         const next = action === 'day-prev' ? current - 1 : current + 1;
         if (next < 0 || next >= dates.length) return;   // 到头了就不动
         statsState.timelineDate = dates[next];
+    } else if (action === 'history') {
+        // 直接返回：统计面板保持原样叠在下面，关掉历史就回到刚才的统计
+        openActivityHistory(trigger.dataset.label);
+        return;
     } else {
         return;
     }
     renderStatsPanel();
+}
+
+/* ------------------------------------------------------------------ */
+/* 一件事的历史（A2）                                                  */
+/* ------------------------------------------------------------------ */
+
+/**
+ * 打开某个活动的历史。
+ *
+ * @param {string} label 活动名
+ * @param {string[]} choices 从笔记卡片进来时的可切换项（`B站+吃饭` 有两个）
+ */
+function openActivityHistory(label, choices = []) {
+    if (!historyModal || !historyContent || !label) return;
+    const data = activityHistory(notes, label);
+    data.choices = choices.length > 1 ? choices : [];
+    if (historyTitle) historyTitle.textContent = `「${label}」的历史`;
+    renderActivityHistory(historyContent, data);
+    historyModal.classList.remove('hidden');
+}
+
+function closeActivityHistory() {
+    if (historyModal) historyModal.classList.add('hidden');
+}
+
+function openHistoryForCurrentNote() {
+    const note = notes.find((item) => item.id === currentNoteId);
+    closeContextMenu();
+    if (!note) return;
+    // 多段标题（`B站+吃饭`）没有"整条的历史"这回事，得先挑一个活动
+    const choices = activitiesInOrder(note.content);
+    if (choices.length === 0) return;
+    openActivityHistory(choices[0], choices);
+}
+
+/**
+ * 跳到列表里的某条笔记：展开它所在的日期分组、滚过去、闪一下。
+ *
+ * 折叠的日期分组里根本没有卡片 DOM（惰性渲染），所以必须先展开再找。
+ */
+function jumpToNote(noteId) {
+    const note = notes.find((item) => item.id === noteId);
+    if (!note) return;
+    closeActivityHistory();
+
+    const locate = () => document.querySelector(`.note-card[data-note-id="${noteId}"]`);
+    // 正在搜索时这条可能被过滤掉了，清空搜索再找，否则"跳过去"会落空
+    if (!locate() && searchTerms && searchTerms.length > 0) {
+        setSearchTerms([]);
+        if (searchInput) searchInput.value = '';
+        if (searchStatus) searchStatus.classList.add('hidden');
+        renderNotes();
+    }
+
+    // 折叠分组里没有卡片 DOM，先把这一天展开（内部会补出惰性跳过的卡片）
+    expandDateGroup(note.date);
+    const card = locate();
+    if (!card) return;
+    try {
+        card.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    } catch { /* jsdom 没有 scrollIntoView */ }
+    card.style.transition = 'background-color 0.35s ease';
+    card.style.backgroundColor = 'rgba(250, 204, 21, 0.35)';
+    setTimeout(() => { card.style.backgroundColor = ''; }, 1200);
+}
+
+function handleHistoryClick(event) {
+    const noteRow = event.target.closest('[data-history-note-id]');
+    if (noteRow) {
+        jumpToNote(noteRow.dataset.historyNoteId);
+        return;
+    }
+    const chip = event.target.closest('[data-history-label]');
+    if (chip) {
+        const choices = [...historyContent.querySelectorAll('[data-history-label]')]
+            .map((element) => element.dataset.historyLabel);
+        openActivityHistory(chip.dataset.historyLabel, choices);
+    }
 }
 
 function initStats() {
@@ -777,6 +864,16 @@ function initStats() {
         statsModal.addEventListener('click', (event) => {
             // 点面板外的遮罩关闭；点面板内部不关
             if (event.target === statsModal) closeStats();
+        });
+    }
+}
+
+function initHistory() {
+    if (closeHistoryBtn) closeHistoryBtn.addEventListener('click', closeActivityHistory);
+    if (historyContent) historyContent.addEventListener('click', handleHistoryClick);
+    if (historyModal) {
+        historyModal.addEventListener('click', (event) => {
+            if (event.target === historyModal) closeActivityHistory();
         });
     }
 }
@@ -1316,6 +1413,7 @@ function bindEventListeners() {
     initSelectionMode();
     initSearch();
     initStats();
+    initHistory();
     if (quickContinueBtn) quickContinueBtn.addEventListener('click', fillGapToNow);
 
     // 时间微调：按钮只服务最高频的「结束时间」，两个输入框都支持 Alt+↑/↓
@@ -1348,6 +1446,7 @@ function bindEventListeners() {
     document.getElementById('cancel-delete-btn').addEventListener('click', closeDeleteModal);
     document.getElementById('edit-note-menu-btn').addEventListener('click', () => { closeContextMenu(); openEditModal(currentNoteId); });
     document.getElementById('duplicate-note-menu-btn').addEventListener('click', duplicateNote);
+    document.getElementById('history-note-menu-btn').addEventListener('click', openHistoryForCurrentNote);
     document.getElementById('delete-note-menu-btn').addEventListener('click', () => { closeContextMenu(); openDeleteModal(currentNoteId); });
     if (helpBtn) helpBtn.addEventListener('click', openHelpModal);
     if (closeHelpBtn) closeHelpBtn.addEventListener('click', closeHelpModal);
@@ -1381,6 +1480,11 @@ function bindEventListeners() {
     deleteModal.addEventListener('click', (e) => { if (e.target === deleteModal) closeDeleteModal(); });
     document.addEventListener('keydown', (e) => {
         if (e.key !== 'Escape') return;
+        // 历史面板是从统计面板里点开的，两层叠着；Esc 先收上面那层
+        if (historyModal && !historyModal.classList.contains('hidden')) {
+            closeActivityHistory();
+            return;
+        }
         // Esc 只关闭「确实开着」的东西；关弹窗不应该顺手清空已选笔记
         const aiSummaryOpen = !aiSummaryModal.classList.contains('hidden');
         const aiResultOpen = !aiResultModal.classList.contains('hidden');
@@ -1399,7 +1503,7 @@ function bindEventListeners() {
 }
 
 function anyModalOpen() {
-    return [noteModal, deleteModal, helpModal, aiSummaryModal, aiResultModal, batchTagModal, statsModal]
+    return [noteModal, deleteModal, helpModal, aiSummaryModal, aiResultModal, batchTagModal, statsModal, historyModal]
         .some(modal => modal && !modal.classList.contains('hidden'));
 }
 

@@ -276,6 +276,13 @@ function createWindow() {
                             "document.getElementById('stats-btn')?.click()"
                         );
                         await wait(1200);
+                        // 附加 --history 再点进第一个活动的历史，方便检查那个面板的排版
+                        if (process.argv.includes('--history')) {
+                            await mainWindow.webContents.executeJavaScript(
+                                "document.querySelector('[data-stats-action=\"history\"]')?.click()"
+                            );
+                            await wait(1200);
+                        }
                     }
                     const image = await mainWindow.webContents.capturePage();
                     fs.writeFileSync(target, image.toPNG());
@@ -616,6 +623,40 @@ async function runSelfTest() {
         '统计面板的图表与控件都画出来了',
         statsProbe.controls >= 8 && statsProbe.blocks > 0,
         `控件 ${statsProbe.controls} / 带提示的元素 ${statsProbe.blocks}`
+    );
+
+    // A2：从统计排行点进"这件事的历史"，并且能跳回列表定位
+    const historyProbe = await win.webContents.executeJavaScript(`(async () => {
+        document.getElementById('stats-btn')?.click();
+        await new Promise((resolve) => setTimeout(resolve, 400));
+        const label = document.querySelector('[data-stats-action="history"]');
+        const name = label ? label.dataset.label : null;
+        label?.click();
+        await new Promise((resolve) => setTimeout(resolve, 300));
+        const content = document.getElementById('history-content');
+        const rows = content ? content.querySelectorAll('[data-history-note-id]').length : 0;
+        const opened = !document.getElementById('history-modal')?.classList.contains('hidden');
+        // 点第一行应该跳回列表并定位到那条笔记
+        const first = content?.querySelector('[data-history-note-id]');
+        const targetId = first ? first.dataset.historyNoteId : null;
+        first?.click();
+        await new Promise((resolve) => setTimeout(resolve, 300));
+        const located = targetId
+            ? Boolean(document.querySelector('.note-card[data-note-id="' + targetId + '"]'))
+            : false;
+        const closed = document.getElementById('history-modal')?.classList.contains('hidden');
+        document.getElementById('stats-btn')?.click();
+        return { name, opened, rows, located, closed };
+    })()`);
+    check(
+        '能打开「这件事的历史」并列出记录',
+        historyProbe.opened && historyProbe.rows >= 1 && Boolean(historyProbe.name),
+        JSON.stringify(historyProbe)
+    );
+    check(
+        '从历史点一行能跳回列表并定位到那条笔记',
+        historyProbe.located && historyProbe.closed === true,
+        JSON.stringify(historyProbe)
     );
 
     // v2.3.0 新增的三块：常用条目容器、接续提示、惰性渲染

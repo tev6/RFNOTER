@@ -331,3 +331,18 @@ export function setDateGroupCollapsed(dateGroup, collapsed) {
         nextElement = nextElement.nextElementSibling;
     }
 }
+
+/**
+ * 按日期展开某一天的分组，供"跳到某条笔记"使用。
+ *
+ * 必须走这里而不是让调用方自己 `querySelector`：折叠的分组里没有卡片 DOM
+ * （惰性渲染），只有 `flushLazyGroup` 知道该怎么把它补出来。
+ *
+ * @returns {boolean} 是否找到了这一天的分组
+ */
+export function expandDateGroup(date) {
+    const dateGroup = findDateGroupElement(date);
+    if (!dateGroup) return false;
+    setDateGroupCollapsed(dateGroup, false);
+    return true;
+}

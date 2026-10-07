@@ -84,6 +84,17 @@ export function canonicalTitle(raw) {
     return splitActivities(raw).join('+');
 }
 
+/**
+ * 按**原始书写顺序**拆出活动（不做排序）。
+ * 给"这条多段笔记要查哪一段的历史"用——用户看到的顺序是什么，选项就该是什么顺序。
+ */
+export function activitiesInOrder(raw) {
+    return normalizeText(raw)
+        .split(ACTIVITY_SEPARATORS)
+        .map((part) => part.trim())
+        .filter(Boolean);
+}
+
 /** 一条笔记的时长（分钟），跨天按绕圈算。 */
 export function noteDurationMinutes(note) {
     const start = parseClockMinutes(note?.timeStart);
@@ -347,4 +358,75 @@ export function formatMinutes(minutes) {
     const hours = Math.floor(value / 60);
     const rest = value % 60;
     return rest === 0 ? `${hours}小时` : `${hours}小时${rest}分钟`;
+}
+
+/**
+ * 一件事的历史：把包含这个活动的笔记全找出来，按时间从新到旧排。
+ *
+ * 匹配规则和统计排行**完全一致**（归一化 + 相似归并），所以点
+ * 「30图小河道表水」也能看到当初写成「30图小河道」的那几次——
+ * 否则这个功能只是在说"你写的一模一样的标题有哪些"，没什么用。
+ *
+ * @param {Array} notes
+ * @param {string} label 活动名（统计排行里显示的组名）
+ * @param {{limit?: number}} options
+ */
+export function activityHistory(notes, label, { limit = 300 } = {}) {
+    const target = normalizeText(label);
+    if (!target) {
+        return { label: '', count: 0, minutes: 0, days: 0, records: [], variants: [] };
+    }
+
+    const records = [];
+    const variants = new Map();
+
+    for (const note of notes) {
+        const activities = splitActivities(note.content);
+        if (activities.length === 0) continue;
+        const hit = activities.find((activity) => isSameActivity(activity, target));
+        if (!hit) continue;
+
+        const full = noteDurationMinutes(note);
+        // 多段笔记（`B站+吃饭`）按段数均摊，和排行口径保持一致，
+        // 否则同一个活动在两处显示的时长会互相矛盾
+        const share = full / activities.length;
+
+        const variant = variants.get(hit) || { label: hit, count: 0, minutes: 0 };
+        variant.count += 1;
+        variant.minutes += share;
+        variants.set(hit, variant);
+
+        records.push({
+            id: note.id,
+            date: note.date,
+            timeStart: note.timeStart,
+            timeEnd: note.timeEnd,
+            content: note.content,
+            matched: hit,
+            minutes: share,
+            fullMinutes: full,
+            segments: activities.length,
+            tag: note.tag || ''
+        });
+    }
+
+    // 新 → 旧；同一天按开始时间倒序
+    records.sort((a, b) => {
+        if (a.date !== b.date) return a.date < b.date ? 1 : -1;
+        return a.timeStart < b.timeStart ? 1 : -1;
+    });
+
+    const minutes = records.reduce((sum, record) => sum + record.minutes, 0);
+    const dates = [...new Set(records.map((record) => record.date))].sort();
+    return {
+        label,
+        count: records.length,
+        minutes,
+        days: dates.length,
+        avgMinutes: records.length ? minutes / records.length : 0,
+        firstDate: dates[0] || null,
+        lastDate: dates[dates.length - 1] || null,
+        variants: [...variants.values()].sort((a, b) => b.minutes - a.minutes),
+        records: records.slice(0, limit)
+    };
 }
