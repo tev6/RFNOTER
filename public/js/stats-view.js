@@ -158,8 +158,8 @@ function renderHourly(data) {
     const bars = data.hourly.map((bucket) => {
         const height = Math.max(2, Math.round((bucket.minutes / max) * 100));
         return `
-            <div class="flex-1 flex flex-col justify-end items-center" title="${bucket.hour} 点：${formatMinutes(bucket.minutes)}，${bucket.count} 条">
-                <div class="w-full bg-ai/70 hover:bg-ai rounded-t transition-colors duration-150" style="height:${height}%"></div>
+            <div class="flex-1 h-full flex flex-col justify-end items-center" title="${bucket.hour} 点：${formatMinutes(bucket.minutes)}，${bucket.count} 条">
+                <div data-hourly-bar class="w-full bg-ai/70 hover:bg-ai rounded-t transition-colors duration-150" style="height:${height}%"></div>
             </div>`;
     }).join('');
     const labels = data.hourly.map((bucket) => `<div class="flex-1 text-center text-[9px] text-gray-400">${bucket.hour % 6 === 0 ? bucket.hour : ''}</div>`).join('');
@@ -181,15 +181,19 @@ function renderHeatmap(data) {
     const blanks = Array.from({ length: offset }, () => '<div class="w-2.5 h-2.5"></div>').join('');
     const cells = days.map((day) => {
         const ratio = day.minutes / max;
-        let level = 'bg-gray-100';
+        // 深色下绿色要反过来排：底色是暗的，越"多"越亮才分得出层次
+        // 暗色下 bg-gray-100 与弹窗底色 bg-surface 是同一个值，空格会整片消失，
+        // 所以空格单独用 gray-200 压一半透明度：既和底色分得开，又不会让 365 个小方块
+        // 在深夜整片发亮（浅色主题下 white 与 gray-100 本来也只差一点点）
+        let level = 'bg-gray-100 dark:bg-gray-200/50';
         if (day.minutes > 0) {
-            if (ratio > 0.75) level = 'bg-green-600';
-            else if (ratio > 0.5) level = 'bg-green-500';
-            else if (ratio > 0.25) level = 'bg-green-400';
-            else level = 'bg-green-200';
+            if (ratio > 0.75) level = 'bg-green-600 dark:bg-green-400';
+            else if (ratio > 0.5) level = 'bg-green-500 dark:bg-green-500';
+            else if (ratio > 0.25) level = 'bg-green-400 dark:bg-green-600';
+            else level = 'bg-green-200 dark:bg-green-800';
         }
         const title = `${day.date}：${day.count} 条 / ${formatMinutes(day.minutes)}`;
-        return `<div class="w-2.5 h-2.5 rounded-sm ${level}" title="${escapeHTML(title)}"></div>`;
+        return `<div data-heatmap-cell class="w-2.5 h-2.5 rounded-sm ${level}" title="${escapeHTML(title)}"></div>`;
     }).join('');
 
     return `
@@ -198,11 +202,11 @@ function renderHeatmap(data) {
                 <h3 class="text-sm font-medium text-gray-700">记录密度（最近 365 天）</h3>
                 <div class="flex items-center gap-1 text-[10px] text-gray-400">
                     <span>少</span>
-                    <div class="w-2.5 h-2.5 rounded-sm bg-gray-100"></div>
-                    <div class="w-2.5 h-2.5 rounded-sm bg-green-200"></div>
-                    <div class="w-2.5 h-2.5 rounded-sm bg-green-400"></div>
-                    <div class="w-2.5 h-2.5 rounded-sm bg-green-500"></div>
-                    <div class="w-2.5 h-2.5 rounded-sm bg-green-600"></div>
+                    <div class="w-2.5 h-2.5 rounded-sm bg-gray-100 dark:bg-gray-200/50"></div>
+                    <div class="w-2.5 h-2.5 rounded-sm bg-green-200 dark:bg-green-800"></div>
+                    <div class="w-2.5 h-2.5 rounded-sm bg-green-400 dark:bg-green-600"></div>
+                    <div class="w-2.5 h-2.5 rounded-sm bg-green-500 dark:bg-green-500"></div>
+                    <div class="w-2.5 h-2.5 rounded-sm bg-green-600 dark:bg-green-400"></div>
                     <span>多</span>
                 </div>
             </div>
@@ -264,7 +268,7 @@ export function renderActivityHistory(container, data) {
     const rows = data.records.map((record) => {
         // 多段笔记要标出"这一段只按均摊算"，否则时长和卡片上看到的对不上
         const shareHint = record.segments > 1
-            ? `<span class="ml-2 text-xs text-amber-600 whitespace-nowrap">多段笔记 ${record.segments} 段 · 本段 ${escapeHTML(formatMinutes(record.minutes))}，整条 ${escapeHTML(formatMinutes(record.fullMinutes))}</span>`
+            ? `<span class="ml-2 text-xs text-amber-600 dark:text-amber-400 whitespace-nowrap">多段笔记 ${record.segments} 段 · 本段 ${escapeHTML(formatMinutes(record.minutes))}，整条 ${escapeHTML(formatMinutes(record.fullMinutes))}</span>`
             : '';
         const tag = record.tag ? `<span class="tag ml-2">${escapeHTML(record.tag)}</span>` : '';
         return `

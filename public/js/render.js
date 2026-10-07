@@ -241,7 +241,7 @@ function createNoteElement(note) {
     const tagHtml = highlightHtml(note.tag || '', searchTerms);
     // 只在详情里命中的，卡片上高亮不出来，得给个交代，否则用户会觉得"这条凭什么在这"
     const detailsHitHtml = match.onlyInDetails
-        ? '<span class="ml-2 text-xs text-amber-600 whitespace-nowrap">（详情中匹配）</span>'
+        ? '<span class="ml-2 text-xs text-amber-600 dark:text-amber-400 whitespace-nowrap">（详情中匹配）</span>'
         : '';
     // 所有来自笔记数据的字段都必须转义后再拼进 innerHTML，避免笔记内容被当成 HTML 执行。
     noteDiv.innerHTML = `

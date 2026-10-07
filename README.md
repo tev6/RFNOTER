@@ -36,6 +36,7 @@
 - 导出 **JSON**（无损，可再导入）/ **Markdown**（给人读）/ **CSV**（给表格与脚本）
 - **桌面端：托盘常驻 + 全局热键（默认 `Ctrl+Shift+Space`）直接跳到输入框 + 开机自启**
 - 出错时写日志文件（`%APPDATA%\rfnoter\logs\`），托盘菜单可直接打开
+- **暗色模式**：顶栏一键切换「跟随系统 / 常暗 / 常亮」，深夜记录不刺眼
 - 响应式设计，支持移动端
 - JSON 文件持久化 + localStorage 离线副本
 
@@ -191,6 +192,11 @@ node_modules\electron\dist\electron.exe . --layout-debug
 
 # 让 Electron 自己截自己的窗口（比外部截图工具可靠，不受 DPI 缩放影响）
 node_modules\electron\dist\electron.exe . --screenshot=out.png
+node_modules\electron\dist\electron.exe . --screenshot=dark.png --dark --stats
+
+# 用独立数据目录跑：正式版正开着时也能跑（否则会因单例锁直接退出），
+# 调试脚本也因此绝不会碰 %APPDATA%\rfnoter 里的真实笔记
+node_modules\electron\dist\electron.exe . --profile-dir=E:\tmp\rfnoter-dev
 ```
 
 > Windows 上如果在别的 Electron 应用（例如某些 IDE 或本工具的宿主）里启动，

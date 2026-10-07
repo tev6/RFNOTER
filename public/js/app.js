@@ -19,6 +19,7 @@ import {
 } from './stats.js';
 import { renderStats, renderActivityHistory } from './stats-view.js';
 import { CONFIG, STORE_LABEL, SAFE_ID_RE } from './config.js';
+import { initTheme } from './theme.js';
 import {
     initRender, setRenderHooks, renderNotes, renderNoteElement,
     removeNoteElement, updateEmptyState, setDateGroupCollapsed, expandDateGroup
@@ -87,6 +88,8 @@ const applyBatchTagBtn = document.getElementById('apply-batch-tag-btn');
 const searchInput = document.getElementById('search-input');
 const searchClearBtn = document.getElementById('search-clear-btn');
 const searchStatus = document.getElementById('search-status');
+const themeBtn = document.getElementById('theme-btn');
+const themeIcon = document.getElementById('theme-icon');
 const statsBtn = document.getElementById('stats-btn');
 const statsModal = document.getElementById('stats-modal');
 const statsContent = document.getElementById('stats-content');
@@ -129,6 +132,9 @@ document.addEventListener('DOMContentLoaded', async () => {
         initImportExport();
         initQuickInput();
         initDesktopBridge();
+        // 主题：读偏好并挂上暗色类、绑定顶栏按钮。放在 try 里是为了
+        // 即使数据加载出问题，换肤也不能跟着坏掉。
+        initTheme({ button: themeBtn, icon: themeIcon });
     } catch (e) {
         console.error('[RFNOTER] 界面初始化失败', e);
     }
@@ -263,7 +269,7 @@ function renderQuickPicks() {
     picks.forEach(({ content, count }) => {
         const chip = document.createElement('button');
         chip.type = 'button';   // 必须在表单外/非 submit，否则点一下就把笔记提交了
-        chip.className = 'px-2.5 py-1 text-xs rounded-full bg-white border border-gray-300 text-gray-700 hover:border-primary hover:text-primary transition-colors duration-150';
+        chip.className = 'px-2.5 py-1 text-xs rounded-full bg-surface border border-gray-300 text-gray-700 hover:border-primary hover:text-primary transition-colors duration-150';
         chip.textContent = content;
         chip.title = `用过 ${count} 次 · 点击填入，双击直接记录`;
         chip.addEventListener('click', () => fillQuickContent(content));
@@ -1439,7 +1445,7 @@ function persistViewState() {
 function updateSyncStatus() {
     const badge = document.getElementById('sync-status');
     if (!badge) return;
-    const warnClass = 'text-xs px-2 py-1 rounded-full bg-amber-100 text-amber-800';
+    const warnClass = 'text-xs px-2 py-1 rounded-full bg-amber-100 text-amber-800 dark:bg-amber-500/15 dark:text-amber-200';
     if (offlineMode) {
         badge.textContent = `读取${STORE_LABEL}失败 · 正在使用本机副本`;
         badge.className = warnClass;

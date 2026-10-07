@@ -7,9 +7,67 @@
     <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data:; connect-src 'self' https://api.deepseek.com;">
     <title>闪录</title>
     <link rel="icon" href="icon.png">
+    <!-- 必须在 tailwind.js 之前跑：先把 <html class="dark"> 挂上，再让 Tailwind 生成样式 -->
+    <script src="js/theme-boot.js"></script>
     <script src="vendor/tailwind.js"></script>
     <link href="vendor/font-awesome/css/font-awesome.min.css" rel="stylesheet">
     <script src="tailwind.config.js"></script>
+    <!--
+        主题变量表 —— 暗色模式只改这一处。
+
+        tailwind.config.js 把 gray-* / surface / scrim / ink 都接到了这些变量上，
+        所以整个界面（约 250 处颜色工具类）靠这里两段声明就整体换肤。
+        深色下把色阶**倒过来**排：50 最暗（页面底色），900 最亮（标题文字），
+        这样浅色里"越深越重"的语义在深色里自动变成"越亮越重"。
+        html.dark 由 js/theme-boot.js 在首次绘制前挂上、js/theme.js 在切换时维护。
+    -->
+    <style>
+        :root {
+            color-scheme: light;
+            --c-gray-50: 249 250 251;
+            --c-gray-100: 243 244 246;
+            --c-gray-200: 229 231 235;
+            --c-gray-300: 209 213 219;
+            --c-gray-400: 156 163 175;
+            --c-gray-500: 107 114 128;
+            --c-gray-600: 75 85 99;
+            --c-gray-700: 55 65 81;
+            --c-gray-800: 31 41 55;
+            --c-gray-900: 17 24 39;
+            --c-surface: 255 255 255;      /* 卡片 / 弹窗 / 吸顶吸底栏底色 */
+            --c-scrim: 107 114 128;        /* 模态遮罩 */
+            --c-ink: 17 24 39;             /* 深色浮层（撤销提示） */
+        }
+        /*
+            换肤的那一瞬间临时关掉过渡。
+            原因：界面颜色是继承下来的 CSS 变量算出来的，而很多元素带 transition-colors/all。
+            Chromium 在"变量变了 + 这个属性正在过渡"时不会把过渡收尾，元素会一直停在旧颜色上
+            （实测等 400ms 仍然是旧色）。加了这个类之后颜色立即到位，也不会整页渐变糊一下。
+            类名由 js/theme.js 的 applyTheme 添加，同一帧内摘掉。
+        */
+        html.theme-switching,
+        html.theme-switching *,
+        html.theme-switching *::before,
+        html.theme-switching *::after {
+            transition: none !important;
+        }
+        html.dark {
+            color-scheme: dark;
+            --c-gray-50: 15 23 42;
+            --c-gray-100: 30 41 59;
+            --c-gray-200: 51 65 85;
+            --c-gray-300: 71 85 105;
+            --c-gray-400: 100 116 139;
+            --c-gray-500: 148 163 184;
+            --c-gray-600: 203 213 225;
+            --c-gray-700: 226 232 240;
+            --c-gray-800: 241 245 249;
+            --c-gray-900: 248 250 252;
+            --c-surface: 30 41 59;
+            --c-scrim: 2 6 23;
+            --c-ink: 51 65 85;
+        }
+    </style>
     <style type="text/tailwindcss">
         @layer utilities {
             .note-card {
@@ -20,7 +78,7 @@
             }
 
             .btn {
-                @apply px-4 py-2 rounded-md font-medium transition-all duration-150 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-white active:scale-95;
+                @apply px-4 py-2 rounded-md font-medium transition-all duration-150 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-surface active:scale-95;
             }
             .btn-primary {
                 @apply bg-primary text-white hover:bg-primary/90 focus:ring-primary/50;
@@ -30,6 +88,12 @@
             }
             .btn-ai {
                 @apply bg-ai text-white hover:bg-ai/90 focus:ring-ai/50;
+            }
+            /* 顶栏的图标按钮：只放一个图标，方形、与旁边的按钮等高 */
+            .icon-btn {
+                @apply inline-flex items-center justify-center h-9 w-9 rounded-md text-gray-600
+                       transition-colors duration-150 hover:bg-gray-200 hover:text-gray-800
+                       focus:outline-none focus:ring-2 focus:ring-primary/50 active:scale-95;
             }
             .input-field {
                 @apply w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-primary focus:border-primary transition-colors duration-150;
@@ -42,7 +106,7 @@
             }
             /* 时间微调按钮：小、方、只改一个字段，避免为它撑高整个录入栏 */
             .time-step-btn {
-                @apply inline-flex items-center justify-center h-9 min-w-[26px] px-1 rounded border border-gray-300 bg-white
+                @apply inline-flex items-center justify-center h-9 min-w-[26px] px-1 rounded border border-gray-300 bg-surface
                        text-gray-600 text-sm leading-none select-none transition-colors duration-150
                        hover:border-primary hover:text-primary active:scale-95;
             }
@@ -51,7 +115,7 @@
             }
             /* 搜索命中：只用背景色，不改字号字重，免得把行高撑变 */
             .search-hit {
-                @apply bg-amber-200 text-gray-900 rounded-sm px-0.5;
+                @apply bg-amber-200 text-gray-900 dark:bg-amber-400/25 dark:text-amber-100 rounded-sm px-0.5;
             }
             .note-row-layout {
                 @apply grid grid-cols-12 gap-2 items-center w-full;
@@ -135,7 +199,7 @@
     </style>
 </head>
 <body class="bg-gray-50 text-gray-900 min-h-screen">
-    <header class="sticky top-0 z-50 bg-white/70 backdrop-blur-md border-b border-gray-200 shadow-sm">
+    <header class="sticky top-0 z-50 bg-surface/70 backdrop-blur-md border-b border-gray-200 shadow-sm">
         <div class="container mx-auto px-4 py-3 flex items-center justify-between">
             <div class="flex items-center space-x-2">
                 <img src="icon.png" alt="" class="w-8 h-8 rounded-lg shadow-sm">
@@ -166,6 +230,10 @@
             <div class="flex items-center space-x-4">
                 <span id="search-status" class="hidden text-xs text-gray-500 whitespace-nowrap"></span>
                 <span id="sync-status" class="hidden"></span>
+                <button id="theme-btn" type="button" class="icon-btn" title="主题：跟随系统"
+                        aria-label="切换主题（跟随系统 / 常暗 / 常亮）">
+                    <i id="theme-icon" class="fa fa-desktop" aria-hidden="true"></i>
+                </button>
                 <button id="stats-btn" class="btn btn-secondary text-sm transition-all duration-150" title="看看时间都花在哪了">
                     <i class="fa fa-bar-chart mr-2"></i>统计
                 </button>
@@ -192,14 +260,14 @@
                 </div>
             </div>
         </div>
-        <div id="selection-mode-hint" class="hidden bg-blue-50 border-b border-blue-200 py-2 px-4 animate-slide-up">
+        <div id="selection-mode-hint" class="hidden bg-blue-50 dark:bg-blue-500/10 border-b border-blue-200 dark:border-blue-500/30 py-2 px-4 animate-slide-up">
             <div class="container mx-auto flex items-center justify-between">
-                <p class="text-sm text-blue-800">
+                <p class="text-sm text-blue-800 dark:text-blue-200">
                     <i class="fa fa-info-circle mr-2"></i>
                     <span class="font-medium">选择模式已开启：</span>
                     <span>点卡片勾选单条；点日期标题勾选整天；<b>Shift + 点击</b>选中两次点击之间的区间喵</span>
                 </p>
-                <button id="close-selection-hint-btn" class="text-blue-600 hover:text-blue-800 transition-colors duration-150" title="退出选择模式">
+                <button id="close-selection-hint-btn" class="text-blue-600 hover:text-blue-800 dark:text-blue-300 dark:hover:text-blue-100 transition-colors duration-150" title="退出选择模式">
                     <i class="fa fa-times"></i>
                 </button>
             </div>
@@ -225,7 +293,7 @@
         </button>
     </div>
 
-    <div class="sticky bottom-0 z-40 bg-white/90 backdrop-blur-md border-t border-gray-200 py-3 shadow-lg">
+    <div class="sticky bottom-0 z-40 bg-surface/90 backdrop-blur-md border-t border-gray-200 py-3 shadow-lg">
         <div class="container mx-auto px-4">
             <div class="bg-gray-100 rounded-lg p-3 shadow-sm">
                 <div class="flex items-center justify-between mb-2 gap-3 flex-wrap">
@@ -278,10 +346,10 @@
     <div id="ai-summary-modal" class="fixed inset-0 z-50 hidden overflow-y-auto">
         <div class="flex items-center justify-center min-h-screen px-4 pt-4 pb-20 text-center sm:block sm:p-0">
             <div class="fixed inset-0 transition-opacity" aria-hidden="true">
-                <div class="absolute inset-0 bg-gray-500 opacity-75"></div>
+                <div class="absolute inset-0 bg-scrim opacity-75"></div>
             </div>
-            <div class="inline-block overflow-hidden text-left align-bottom transition-all transform bg-white rounded-lg shadow-xl sm:my-8 sm:align-middle sm:max-w-4xl sm:w-full animate-slide-up">
-                <div class="px-4 pt-5 pb-4 bg-white sm:p-6 sm:pb-4">
+            <div class="inline-block overflow-hidden text-left align-bottom transition-all transform bg-surface rounded-lg shadow-xl sm:my-8 sm:align-middle sm:max-w-4xl sm:w-full animate-slide-up">
+                <div class="px-4 pt-5 pb-4 bg-surface sm:p-6 sm:pb-4">
                     <div class="sm:flex sm:items-start">
                         <div class="mt-3 text-center sm:mt-0 sm:ml-4 sm:text-left w-full">
                             <div class="flex justify-between items-center mb-4">
@@ -400,10 +468,10 @@
     <div id="ai-result-modal" class="fixed inset-0 z-50 hidden overflow-y-auto">
         <div class="flex items-center justify-center min-h-screen px-4 pt-4 pb-20 text-center sm:block sm:p-0">
             <div class="fixed inset-0 transition-opacity" aria-hidden="true">
-                <div class="absolute inset-0 bg-gray-500 opacity-75"></div>
+                <div class="absolute inset-0 bg-scrim opacity-75"></div>
             </div>
-            <div class="inline-block overflow-hidden text-left align-bottom transition-all transform bg-white rounded-lg shadow-xl sm:my-8 sm:align-middle sm:max-w-4xl sm:w-full animate-slide-up">
-                <div class="px-4 pt-5 pb-4 bg-white sm:p-6 sm:pb-4">
+            <div class="inline-block overflow-hidden text-left align-bottom transition-all transform bg-surface rounded-lg shadow-xl sm:my-8 sm:align-middle sm:max-w-4xl sm:w-full animate-slide-up">
+                <div class="px-4 pt-5 pb-4 bg-surface sm:p-6 sm:pb-4">
                     <div class="sm:flex sm:items-start">
                         <div class="mt-3 text-center sm:mt-0 sm:ml-4 sm:text-left w-full">
                             <div class="flex justify-between items-center mb-4">
@@ -451,10 +519,10 @@
     <div id="note-modal" class="fixed inset-0 z-50 hidden overflow-y-auto">
         <div class="flex items-center justify-center min-h-screen px-4 pt-4 pb-20 text-center sm:block sm:p-0">
             <div class="fixed inset-0 transition-opacity" aria-hidden="true">
-                <div class="absolute inset-0 bg-gray-500 opacity-75"></div>
+                <div class="absolute inset-0 bg-scrim opacity-75"></div>
             </div>
-            <div class="inline-block overflow-hidden text-left align-bottom transition-all transform bg-white rounded-lg shadow-xl sm:my-8 sm:align-middle sm:max-w-lg sm:w-full animate-slide-up">
-                <div class="px-4 pt-5 pb-4 bg-white sm:p-6 sm:pb-4">
+            <div class="inline-block overflow-hidden text-left align-bottom transition-all transform bg-surface rounded-lg shadow-xl sm:my-8 sm:align-middle sm:max-w-lg sm:w-full animate-slide-up">
+                <div class="px-4 pt-5 pb-4 bg-surface sm:p-6 sm:pb-4">
                     <div class="sm:flex sm:items-start">
                         <div class="mt-3 text-center sm:mt-0 sm:ml-4 sm:text-left w-full">
                             <h3 id="modal-title" class="text-lg font-medium leading-6 text-gray-900 mb-4">编辑笔记</h3>
@@ -510,9 +578,9 @@
     </div>
 
     <!-- 统计面板：内容由 stats-view.js 渲染 -->
-    <div id="stats-modal" class="fixed inset-0 z-50 hidden overflow-y-auto bg-gray-900/50">
+    <div id="stats-modal" class="fixed inset-0 z-50 hidden overflow-y-auto bg-scrim/60">
         <div class="container mx-auto px-4 py-6">
-            <div class="bg-white rounded-lg shadow-xl">
+            <div class="bg-surface rounded-lg shadow-xl">
                 <div class="flex items-center justify-between px-6 py-4 border-b border-gray-200">
                     <h2 class="text-lg font-medium text-gray-900">统计</h2>
                     <button id="close-stats-btn" class="text-gray-500 hover:text-gray-700 transition-colors duration-150" title="关闭（Esc）">
@@ -525,9 +593,9 @@
     </div>
 
     <!-- 一件事的历史：内容由 stats-view.js 渲染（A2） -->
-    <div id="history-modal" class="fixed inset-0 z-50 hidden overflow-y-auto bg-gray-900/50">
+    <div id="history-modal" class="fixed inset-0 z-50 hidden overflow-y-auto bg-scrim/60">
         <div class="container mx-auto px-4 py-6">
-            <div class="bg-white rounded-lg shadow-xl">
+            <div class="bg-surface rounded-lg shadow-xl">
                 <div class="flex items-center justify-between px-6 py-4 border-b border-gray-200">
                     <h2 id="history-title" class="text-lg font-medium text-gray-900">历史</h2>
                     <button id="close-history-btn" class="text-gray-500 hover:text-gray-700 transition-colors duration-150" title="关闭（Esc）">
@@ -543,10 +611,10 @@
     <div id="batch-tag-modal" class="fixed inset-0 z-50 hidden overflow-y-auto">
         <div class="flex items-center justify-center min-h-screen px-4">
             <div class="fixed inset-0 transition-opacity" aria-hidden="true">
-                <div class="absolute inset-0 bg-gray-500 opacity-75"></div>
+                <div class="absolute inset-0 bg-scrim opacity-75"></div>
             </div>
-            <div class="relative inline-block text-left align-bottom transition-all transform bg-white rounded-lg shadow-xl sm:my-8 sm:align-middle sm:max-w-md sm:w-full animate-slide-up">
-                <div class="px-4 pt-5 pb-4 bg-white sm:p-6">
+            <div class="relative inline-block text-left align-bottom transition-all transform bg-surface rounded-lg shadow-xl sm:my-8 sm:align-middle sm:max-w-md sm:w-full animate-slide-up">
+                <div class="px-4 pt-5 pb-4 bg-surface sm:p-6">
                     <h3 class="text-lg font-medium leading-6 text-gray-900 mb-4">
                         批量修改标签（<span id="batch-tag-count">0</span> 条）
                     </h3>
@@ -578,10 +646,10 @@
     <div id="help-modal" class="fixed inset-0 z-50 hidden overflow-y-auto">
         <div class="flex items-center justify-center min-h-screen px-4 pt-4 pb-20 text-center sm:block sm:p-0">
             <div class="fixed inset-0 transition-opacity" aria-hidden="true">
-                <div class="absolute inset-0 bg-gray-500 opacity-75"></div>
+                <div class="absolute inset-0 bg-scrim opacity-75"></div>
             </div>
-            <div class="inline-block overflow-hidden text-left align-bottom transition-all transform bg-white rounded-lg shadow-xl sm:my-8 sm:align-middle sm:max-w-2xl sm:w-full animate-slide-up">
-                <div class="px-4 pt-5 pb-4 bg-white sm:p-6 sm:pb-4">
+            <div class="inline-block overflow-hidden text-left align-bottom transition-all transform bg-surface rounded-lg shadow-xl sm:my-8 sm:align-middle sm:max-w-2xl sm:w-full animate-slide-up">
+                <div class="px-4 pt-5 pb-4 bg-surface sm:p-6 sm:pb-4">
                     <div class="flex items-center justify-between mb-4">
                         <h3 class="text-lg font-medium leading-6 text-gray-900">闪录使用教程</h3>
                         <button id="close-help-btn" class="text-gray-500 hover:text-gray-700 transition-colors duration-150"><i class="fa fa-times"></i></button>
@@ -596,7 +664,7 @@
     </div>
 
     <!-- 导出格式选择：JSON 无损可再导入，Markdown/CSV 是拿出去用的 -->
-    <div id="export-menu" class="hidden fixed z-50 w-56 bg-white/95 backdrop-blur-md rounded-md shadow-lg border border-gray-200 py-1">
+    <div id="export-menu" class="hidden fixed z-50 w-56 bg-surface/95 backdrop-blur-md rounded-md shadow-lg border border-gray-200 py-1">
         <button type="button" class="export-menu-item" data-format="json">
             <i class="fa fa-archive mr-2"></i>JSON 完整备份
             <span class="block pl-6 text-xs text-gray-400">无损，可再导入</span>
@@ -611,7 +679,7 @@
         </button>
     </div>
 
-    <div id="context-menu" class="hidden fixed z-50 w-48 bg-white/70 backdrop-blur-md rounded-md shadow-lg py-1 animate-slide-in">
+    <div id="context-menu" class="hidden fixed z-50 w-48 bg-surface/70 backdrop-blur-md rounded-md shadow-lg py-1 animate-slide-in">
         <button class="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 transition-colors duration-150" id="edit-note-menu-btn"><i class="fa fa-pencil mr-2"></i> 编辑</button>
         <button class="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 transition-colors duration-150" id="duplicate-note-menu-btn"><i class="fa fa-clone mr-2"></i> 复制</button>
         <button class="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 transition-colors duration-150" id="history-note-menu-btn"><i class="fa fa-history mr-2"></i> 看这件事的历史</button>
@@ -620,7 +688,7 @@
                 <span><i class="fa fa-tag mr-2"></i> 颜色标记</span>
                 <i class="fa fa-chevron-right text-xs"></i>
             </button>
-            <div id="color-submenu" class="hidden absolute left-full top-0 ml-1 w-32 bg-white/70 backdrop-blur-md rounded-md shadow-lg p-2">
+            <div id="color-submenu" class="hidden absolute left-full top-0 ml-1 w-32 bg-surface/70 backdrop-blur-md rounded-md shadow-lg p-2">
                 <div class="grid grid-cols-3 gap-2">
                     <div class="color-dot bg-note1 border-note1 mx-auto" data-color="note1" title="蓝色"></div>
                     <div class="color-dot bg-note2 border-note2 mx-auto" data-color="note2" title="绿色"></div>
@@ -638,12 +706,12 @@
     <div id="delete-modal" class="fixed inset-0 z-50 hidden overflow-y-auto">
         <div class="flex items-center justify-center min-h-screen px-4 pt-4 pb-20 text-center sm:block sm:p-0">
             <div class="fixed inset-0 transition-opacity" aria-hidden="true">
-                <div class="absolute inset-0 bg-gray-500 opacity-75"></div>
+                <div class="absolute inset-0 bg-scrim opacity-75"></div>
             </div>
-            <div class="inline-block overflow-hidden text-left align-bottom transition-all transform bg-white rounded-lg shadow-xl sm:my-8 sm:align-middle sm:max-w-lg sm:w-full animate-slide-up">
-                <div class="px-4 pt-5 pb-4 bg-white sm:p-6 sm:pb-4">
+            <div class="inline-block overflow-hidden text-left align-bottom transition-all transform bg-surface rounded-lg shadow-xl sm:my-8 sm:align-middle sm:max-w-lg sm:w-full animate-slide-up">
+                <div class="px-4 pt-5 pb-4 bg-surface sm:p-6 sm:pb-4">
                     <div class="sm:flex sm:items-start">
-                        <div class="mx-auto flex-shrink-0 flex items-center justify-center h-12 w-12 rounded-full bg-red-100 sm:mx-0 sm:h-10 sm:w-10">
+                        <div class="mx-auto flex-shrink-0 flex items-center justify-center h-12 w-12 rounded-full bg-red-100 dark:bg-red-500/20 sm:mx-0 sm:h-10 sm:w-10">
                             <i class="fa fa-exclamation-triangle text-red-600"></i>
                         </div>
                         <div class="mt-3 text-center sm:mt-0 sm:ml-4 sm:text-left">
@@ -663,7 +731,7 @@
     </div>
 
     <!-- 撤销删除（A5）：只在刚删完的那几秒里出现，放左下角，避开右下角的保存提示 -->
-    <div id="undo-toast" class="hidden fixed bottom-20 left-4 z-50 bg-gray-900/95 text-white rounded-md shadow-lg px-4 py-2 flex items-center gap-3 text-sm">
+    <div id="undo-toast" class="hidden fixed bottom-20 left-4 z-50 bg-ink/95 text-white rounded-md shadow-lg px-4 py-2 flex items-center gap-3 text-sm">
         <i class="fa fa-trash-o text-gray-400"></i>
         <span id="undo-toast-text"></span>
         <button id="undo-toast-btn" class="px-2 py-0.5 rounded bg-white/15 hover:bg-white/25 transition-colors duration-150 font-medium">
@@ -674,7 +742,7 @@
         </button>
     </div>
 
-    <div id="save-indicator" class="fixed bottom-20 right-4 bg-white/70 backdrop-blur-md px-4 py-2 rounded-md shadow-lg flex items-center space-x-2 transform translate-y-10 opacity-0 transition-all duration-300 z-40">
+    <div id="save-indicator" class="fixed bottom-20 right-4 bg-surface/70 backdrop-blur-md px-4 py-2 rounded-md shadow-lg flex items-center space-x-2 transform translate-y-10 opacity-0 transition-all duration-300 z-40">
         <i class="fa fa-check-circle text-green-500"></i>
         <span>已保存</span>
     </div>

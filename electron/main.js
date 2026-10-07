@@ -1,6 +1,6 @@
 import {
     app, BrowserWindow, Tray, Menu, globalShortcut, ipcMain,
-    nativeImage, shell, protocol, screen
+    nativeImage, shell, protocol, screen, nativeTheme
 } from 'electron';
 import path from 'node:path';
 import fs from 'node:fs';
@@ -14,6 +14,14 @@ const ROOT = path.dirname(HERE);
 const PUBLIC_DIR = path.join(ROOT, 'public');
 const ASSETS_DIR = path.join(HERE, 'assets');
 const IS_SELFTEST = process.argv.includes('--selftest');
+/**
+ * --profile-dir=<路径>：开发用，把 userData 指到一个独立目录。
+ *
+ * 两个用途：① 正式版正开着时，开发实例会因单例锁直接退出，指到别处就能跑起来；
+ * ② 跑截图/调试脚本时绝不碰 %APPDATA%\rfnoter 里的真实笔记。
+ * 生产使用不会带这个参数，带了也只影响这一次进程。
+ */
+const PROFILE_DIR = process.argv.find((arg) => arg.startsWith('--profile-dir='))?.slice('--profile-dir='.length) || null;
 /** 全局热键候选：第一个能被注册成功的就用它。 */
 const HOTKEY_CANDIDATES = ['Control+Shift+Space', 'Alt+Shift+N', 'Control+Alt+N'];
 const APP_ORIGIN = 'app://rfnoter';
@@ -29,6 +37,10 @@ if (IS_SELFTEST) {
     const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'rfnoter-selftest-'));
     app.setPath('userData', tmpRoot);
     app.setPath('sessionData', tmpRoot);
+} else if (PROFILE_DIR) {
+    fs.mkdirSync(PROFILE_DIR, { recursive: true });
+    app.setPath('userData', PROFILE_DIR);
+    app.setPath('sessionData', PROFILE_DIR);
 } else {
     const stableUserData = path.join(app.getPath('appData'), APP_DATA_DIR_NAME);
     fs.mkdirSync(stableUserData, { recursive: true });
@@ -175,7 +187,9 @@ function createWindow() {
         minHeight: 520,
         title: '闪录',
         icon: iconImage('icon.png'),
-        backgroundColor: '#f9fafb',
+        // 首帧底色跟着系统配色走；用户显式选的主题会在页面加载后经 IPC 同步过来。
+        // 窗口是 show:false + ready-to-show 才显示的，所以这个颜色平时看不见。
+        backgroundColor: nativeTheme.shouldUseDarkColors ? '#0f172a' : '#f9fafb',
         autoHideMenuBar: true,
         show: false,
         webPreferences: {
@@ -264,13 +278,28 @@ function createWindow() {
         // --screenshot=<path>：让 Electron 自己截自己的窗口，避免外部截图工具
         // 在 DPI 缩放下坐标错位（150% 缩放时 GetWindowRect/CopyFromScreen 会互相错开）
         // 附加 --stats 可以先打开统计面板再截，方便检查那个全屏面板的排版
+        // 附加 --dark 可以先切到暗色再截（查完会把原来的主题偏好写回去，不动用户的设置）
         const shotArg = process.argv.find((arg) => arg.startsWith('--screenshot='));
         if (shotArg) {
             const target = shotArg.slice('--screenshot='.length);
             const openStatsFirst = process.argv.includes('--stats');
             mainWindow.webContents.once('did-finish-load', async () => {
                 await wait(2500);
+                const wantDark = process.argv.includes('--dark');
+                let themeBeforeShot = null;
                 try {
+                    if (wantDark) {
+                        themeBeforeShot = await mainWindow.webContents.executeJavaScript(
+                            "localStorage.getItem('theme')"
+                        );
+                        // 点顶栏按钮直到真的切到暗色（最多 3 下走完一轮），避免"本来就暗"时反而切走
+                        await mainWindow.webContents.executeJavaScript(`(() => {
+                            const btn = document.getElementById('theme-btn');
+                            for (let i = 0; i < 3 && btn.dataset.themeMode !== 'dark'; i += 1) btn.click();
+                            return btn.dataset.themeMode;
+                        })()`);
+                        await wait(600);
+                    }
                     if (openStatsFirst) {
                         await mainWindow.webContents.executeJavaScript(
                             "document.getElementById('stats-btn')?.click()"
@@ -287,6 +316,13 @@ function createWindow() {
                     const image = await mainWindow.webContents.capturePage();
                     fs.writeFileSync(target, image.toPNG());
                     console.log(`[RFNOTER] screenshot saved: ${target} ${image.getSize().width}x${image.getSize().height}`);
+                    if (wantDark) {
+                        // 只是为了截图才切的暗色，别把用户的常用主题改掉
+                        await mainWindow.webContents.executeJavaScript(
+                            `localStorage.setItem('theme', ${JSON.stringify(themeBeforeShot ?? 'system')})`
+                        );
+                        console.log('[RFNOTER] 主题偏好已还原为 ' + (themeBeforeShot ?? 'system'));
+                    }
                 } catch (err) {
                     console.error('[RFNOTER] screenshot failed:', err.message);
                 }
@@ -407,6 +443,14 @@ function registerIpc() {
     ipcMain.handle('app:open-log-dir', () => shell.openPath(logger.dir));
     ipcMain.handle('app:open-backup-dir', () => shell.openPath(store.backupsDir));
     ipcMain.handle('app:backup-now', (_event, userId) => store.backup(userId, { force: true }));
+    // D4 暗色模式：把界面上的选择同步给系统层。设成 'light'/'dark' 之后，
+    // Windows 的标题栏与原生控件会跟着变色（'system' 则交还给系统）。
+    // 它同时决定渲染进程里 prefers-color-scheme 的取值，所以「跟随系统」
+    // 这一档必须老老实实传 'system'，否则会自己骗自己。
+    ipcMain.handle('theme:set', (_event, mode) => {
+        nativeTheme.themeSource = (mode === 'light' || mode === 'dark') ? mode : 'system';
+        return nativeTheme.themeSource;
+    });
     ipcMain.handle('app:info', () => ({
         version: app.getVersion(),
         dataDir: store.dataDir,
@@ -608,7 +652,13 @@ async function runSelfTest() {
             hourly: text.includes('作息分布'),
             heatmap: text.includes('记录密度'),
             controls: content ? content.querySelectorAll('[data-stats-action]').length : 0,
-            blocks: content ? content.querySelectorAll('[title]').length : 0
+            blocks: content ? content.querySelectorAll('[title]').length : 0,
+            // 柱子高度百分比挂在 flex 项上，外层没有可参照的高度时会被算成 0 —— 实测踩过
+            hourlyBars: content ? content.querySelectorAll('[data-hourly-bar]').length : 0,
+            hourlyBarHeight: content
+                ? Math.max(0, ...[...content.querySelectorAll('[data-hourly-bar]')]
+                    .map((el) => Math.round(el.getBoundingClientRect().height)))
+                : 0
         };
         document.getElementById('stats-btn')?.click();
         return result;
@@ -623,6 +673,11 @@ async function runSelfTest() {
         '统计面板的图表与控件都画出来了',
         statsProbe.controls >= 8 && statsProbe.blocks > 0,
         `控件 ${statsProbe.controls} / 带提示的元素 ${statsProbe.blocks}`
+    );
+    check(
+        '统计面板：作息分布的柱子有真实高度（没被 flex 压成 0）',
+        statsProbe.hourlyBars === 24 && statsProbe.hourlyBarHeight > 0,
+        `柱子 ${statsProbe.hourlyBars} 根 / 最高 ${statsProbe.hourlyBarHeight}px`
     );
 
     // A2：从统计排行点进"这件事的历史"，并且能跳回列表定位
@@ -691,6 +746,91 @@ async function runSelfTest() {
         '撤销的结果也落盘了',
         afterUndoOnDisk.ok && afterUndoOnDisk.notes.length === 1,
         JSON.stringify(afterUndoOnDisk).slice(0, 120)
+    );
+
+    // D4 暗色模式：点按钮能换肤、颜色真的落到 CSS 上、偏好记得住、能转回跟随系统。
+    // 这里断言的是**计算后的颜色**而不是"点了一下没报错"——变量换肤一旦没生效
+    // （比如 Tailwind 不支持 <alpha-value>），颜色会退化成透明，下面这几条立刻就会红。
+    //
+    // 等待时间刻意压得很短（120ms）：换肤时 js/theme.js 会临时关掉过渡，颜色是立即到位的。
+    // 哪天那个开关被去掉了，带 transition 的元素就会卡在旧颜色上 —— 这几条会当场发现。
+    // 所以**不要靠调长等待时间来"修好"它**。
+    const themeProbe = await win.webContents.executeJavaScript(`(async () => {
+        const root = document.documentElement;
+        const btn = document.getElementById('theme-btn');
+        const snap = () => ({
+            mode: btn.dataset.themeMode,
+            title: btn.title,
+            stored: localStorage.getItem('theme'),
+            dark: root.classList.contains('dark'),
+            colorScheme: root.style.colorScheme,
+            body: getComputedStyle(document.body).backgroundColor,
+            header: getComputedStyle(document.querySelector('header')).backgroundColor,
+            group: getComputedStyle(document.querySelector('.date-header')).backgroundColor
+        });
+        const click = async () => { btn.click(); await new Promise((r) => setTimeout(r, 120)); };
+        const initial = snap();
+        await click();
+        const dark = snap();
+        await click();
+        const light = snap();
+        await click();
+        const system = snap();
+        // 顺手验一件实测踩过的事：暗色下热力图的"空格"不能和弹窗底色一样，
+        // 否则整张热力图就是一片空白（浅色主题下 white 与 gray-100 是分得开的）。
+        const clickUntil = async (target) => {
+            for (let i = 0; i < 4 && btn.dataset.themeMode !== target; i += 1) await click();
+        };
+        await clickUntil('dark');
+        document.getElementById('stats-btn').click();
+        await new Promise((r) => setTimeout(r, 500));
+        const cell = document.querySelector('#stats-content [data-heatmap-cell]');
+        const dialog = document.querySelector('#stats-modal > div > div');
+        const heatmap = {
+            cell: cell ? getComputedStyle(cell).backgroundColor : null,
+            dialog: dialog ? getComputedStyle(dialog).backgroundColor : null
+        };
+        document.getElementById('close-stats-btn').click();
+        await new Promise((r) => setTimeout(r, 200));
+        await clickUntil('system');
+        return { themeBtnExists: !!btn, initial, dark, light, system, heatmap };
+    })()`);
+
+    check(
+        'D4 暗色模式：点一下顶栏按钮，整页转暗（页面底 / 吸顶栏 / 日期分组三处一起变）',
+        themeProbe.themeBtnExists && themeProbe.dark.mode === 'dark' && themeProbe.dark.dark === true
+            && themeProbe.dark.colorScheme === 'dark'
+            && themeProbe.dark.body === 'rgb(15, 23, 42)'
+            && themeProbe.dark.header === 'rgba(30, 41, 59, 0.7)'
+            && themeProbe.dark.group === 'rgb(30, 41, 59)',
+        JSON.stringify(themeProbe.dark)
+    );
+    check(
+        'D4 暗色模式：再点一下回到亮色，三处颜色全部还原',
+        themeProbe.light.mode === 'light' && themeProbe.light.dark === false
+            && themeProbe.light.colorScheme === 'light'
+            && themeProbe.light.body === 'rgb(249, 250, 251)'
+            && themeProbe.light.header === 'rgba(255, 255, 255, 0.7)'
+            && themeProbe.light.group === 'rgb(243, 244, 246)',
+        JSON.stringify(themeProbe.light)
+    );
+    check(
+        'D4 暗色模式：偏好当场落盘，按钮提示会说明下一个状态',
+        themeProbe.dark.stored === 'dark' && /点击切换到/.test(themeProbe.dark.title || ''),
+        `stored=${themeProbe.dark.stored} title=${themeProbe.dark.title}`
+    );
+    check(
+        'D4 暗色模式：热力图的空格与弹窗底色可区分（否则整张图看不见）',
+        Boolean(themeProbe.heatmap?.cell) && Boolean(themeProbe.heatmap?.dialog)
+            && themeProbe.heatmap.cell !== themeProbe.heatmap.dialog,
+        JSON.stringify(themeProbe.heatmap)
+    );
+    check(
+        'D4 暗色模式：第三下回到「跟随系统」，配色与启动时一致（没有残留）',
+        themeProbe.system.mode === 'system' && themeProbe.system.stored === 'system'
+            && themeProbe.system.dark === themeProbe.initial.dark
+            && themeProbe.system.body === themeProbe.initial.body,
+        JSON.stringify(themeProbe.system) + ' vs initial ' + JSON.stringify(themeProbe.initial)
     );
 
     // v2.3.0 新增的三块：常用条目容器、接续提示、惰性渲染

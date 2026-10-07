@@ -40,10 +40,21 @@ function makeNote(overrides = {}) {
 }
 
 /** 起一套隔离环境：新的 jsdom + 新的模块实例（用查询串绕过 ESM 缓存）。 */
-async function bootApp({ serverNotes = [], localNotes = null, confirmAnswer = true } = {}) {
+async function bootApp({ serverNotes = [], localNotes = null, confirmAnswer = true, theme = null, systemDark = false } = {}) {
     const dom = new JSDOM(INDEX_HTML, { url: 'http://localhost:3000/' });
     const { window } = dom;
     window.alert = () => {};
+    // jsdom 没有 matchMedia，而主题模块要靠它判断"跟随系统"。
+    // 这里固定成确定值，用例才不会随开发机的系统配色飘。
+    window.matchMedia = (query) => ({
+        matches: systemDark && String(query).includes('dark'),
+        media: query,
+        addEventListener() {},
+        removeEventListener() {},
+        addListener() {},
+        removeListener() {}
+    });
+    if (theme) window.localStorage.setItem('theme', theme);
     window.confirm = () => confirmAnswer;
     // api.js 只在首次导入时读取 userId，这里固定成同一个值，保证每个用例的键一致
     window.localStorage.setItem('userId', TEST_USER_ID);
@@ -985,6 +996,25 @@ test('A1 统计：面板能打开，四大块都渲染，概览数字正确', as
     assert.match(text, /1小时30分钟/, '两条合计 90 分钟');
 });
 
+test('A1 统计：作息分布有 24 根柱子，且高度百分比有可参照的父级', async () => {
+    // 踩过的坑：柱子的 height 用百分比，而父级 flex 项高度是内容高度（0），
+    // 百分比解析成 0 —— 图看着"渲染了"，其实一根柱子都看不到。
+    const notes = [makeNote({ id: 'n1', content: '睡觉', timeStart: '23:00', timeEnd: '23:59' })];
+    const { document, window } = await bootApp({ serverNotes: notes });
+    await openStatsToday(document, window);
+
+    const bars = [...document.querySelectorAll('#stats-content [data-hourly-bar]')];
+    assert.equal(bars.length, 24, '一天应该有 24 根柱子');
+    assert.ok(bars.every((bar) => /height:\s*\d+%/.test(bar.getAttribute('style') || '')),
+        '每根柱子都要带百分比高度');
+    assert.ok(bars.some((bar) => Number(/height:\s*(\d+)%/.exec(bar.getAttribute('style'))[1]) > 2),
+        '有记录的那个小时，柱子应该比"垫底高度 2%"高');
+    for (const bar of bars) {
+        assert.match(bar.parentElement.className, /h-full/,
+            '父级必须有确定的高度，否则百分比高度会解析成 0');
+    }
+});
+
 test('A1 统计：切换口径会改变排行——均摊 30 分钟，全额 60 分钟', async () => {
     const notes = [makeNote({ id: 'n1', content: '吃饭+B站', timeStart: '10:00', timeEnd: '11:00' })];
     const { document, window } = await bootApp({ serverNotes: notes });
@@ -1246,4 +1276,63 @@ test('A5 撤销：确认文案不能再说"无法撤销"', async () => {
     const text = document.getElementById('delete-modal').textContent;
     assert.ok(!text.includes('无法撤销'), '已经有撤销了，再这么写就是骗人');
     assert.match(text, /可以撤销/);
+});
+
+/* ------------------------------------------------------------------ */
+/* D4 暗色模式                                                          */
+/* ------------------------------------------------------------------ */
+
+test('D4 暗色模式：顶栏按钮一点换肤，偏好落盘，第三下回到跟随系统', async () => {
+    const { document, window } = await bootApp({ serverNotes: [makeNote()] });
+    const root = document.documentElement;
+    const button = document.getElementById('theme-btn');
+    const icon = document.getElementById('theme-icon');
+    assert.ok(button, '顶栏应该有主题按钮');
+    assert.ok(icon, '按钮里应该有图标元素');
+
+    // 没存过偏好 → 跟随系统；测试里系统是亮色
+    assert.equal(button.dataset.themeMode, 'system');
+    assert.equal(root.classList.contains('dark'), false);
+    assert.equal(icon.className, 'fa fa-desktop');
+
+    button.dispatchEvent(new window.Event('click', { bubbles: true }));
+    await flush(20);
+    assert.equal(button.dataset.themeMode, 'dark', '第一下应该直接变暗');
+    assert.equal(root.classList.contains('dark'), true);
+    assert.equal(root.style.colorScheme, 'dark');
+    assert.equal(icon.className, 'fa fa-moon-o');
+    assert.equal(window.localStorage.getItem('theme'), 'dark', '偏好要落盘，重开还是暗的');
+    assert.match(button.title, /常亮/, '提示要说明下一个状态');
+
+    button.dispatchEvent(new window.Event('click', { bubbles: true }));
+    await flush(20);
+    assert.equal(button.dataset.themeMode, 'light');
+    assert.equal(root.classList.contains('dark'), false);
+    assert.equal(icon.className, 'fa fa-sun-o');
+
+    button.dispatchEvent(new window.Event('click', { bubbles: true }));
+    await flush(20);
+    assert.equal(button.dataset.themeMode, 'system');
+    assert.equal(window.localStorage.getItem('theme'), 'system');
+});
+
+test('D4 暗色模式：系统是暗色时，"跟随系统"一启动就是暗的', async () => {
+    const { document, window } = await bootApp({ serverNotes: [makeNote()], systemDark: true });
+    assert.equal(document.documentElement.classList.contains('dark'), true);
+    assert.equal(document.getElementById('theme-icon').className, 'fa fa-desktop');
+
+    // 点两下到"常亮"：系统是暗的也要听用户的
+    const button = document.getElementById('theme-btn');
+    button.dispatchEvent(new window.Event('click', { bubbles: true }));
+    await flush(20);
+    button.dispatchEvent(new window.Event('click', { bubbles: true }));
+    await flush(20);
+    assert.equal(button.dataset.themeMode, 'light');
+    assert.equal(document.documentElement.classList.contains('dark'), false);
+});
+
+test('D4 暗色模式：上次选了常暗，这次打开就是暗的', async () => {
+    const { document } = await bootApp({ serverNotes: [makeNote()], theme: 'dark' });
+    assert.equal(document.documentElement.classList.contains('dark'), true);
+    assert.equal(document.getElementById('theme-btn').dataset.themeMode, 'dark');
 });

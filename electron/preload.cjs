@@ -14,6 +14,7 @@ contextBridge.exposeInMainWorld('rfnoter', {
     openDataDir: () => ipcRenderer.invoke('app:open-data-dir'),
     openLogDir: () => ipcRenderer.invoke('app:open-log-dir'),
     openBackupDir: () => ipcRenderer.invoke('app:open-backup-dir'),
+    setThemeSource: (mode) => ipcRenderer.invoke('theme:set', mode),
     backupNow: (userId) => ipcRenderer.invoke('app:backup-now', userId),
     onQuickCapture: (callback) => {
         ipcRenderer.on('quick-capture', () => callback());

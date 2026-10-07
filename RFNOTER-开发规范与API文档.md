@@ -91,8 +91,10 @@ RFNOTER/
 │   └── js/
 │       ├── app.js              # 应用主逻辑
 │       ├── utils.js            # 工具函数
+│       ├── theme.js            # 主题（亮/暗/跟随系统）逻辑与接线（v2.10.0）
+│       ├── theme-boot.js       # 普通脚本：首次绘制前挂 html.dark（v2.10.0）
 │       └── api.js              # 存储适配层 + DeepSeek 调用
-├── test/                       # node:test 测试（52 个用例）
+├── test/                       # node:test 测试（180 个用例）
 │   ├── utils.test.js
 │   ├── electron-store.test.js
 │   ├── server.test.js
@@ -807,6 +809,7 @@ DOMContentLoaded
 
 ```javascript
 tailwind.config = {
+  darkMode: 'class',
   theme: {
     extend: {
       colors: {
@@ -818,7 +821,18 @@ tailwind.config = {
         note2: '#10b981',
         note3: '#f59e0b',
         note4: '#ef4444',
-        note5: '#8b5cf6'
+        note5: '#8b5cf6',
+
+        // 主题色：全部由 CSS 变量驱动，变量表见 public/index.html 的 :root / html.dark
+        // （深色下色阶整体倒过来排，详见 9.4）
+        gray: {
+          50: 'rgb(var(--c-gray-50) / <alpha-value>)',
+          500: 'rgb(var(--c-gray-500) / <alpha-value>)'
+          // …100~900 同理
+        },
+        surface: 'rgb(var(--c-surface) / <alpha-value>)',
+        scrim: 'rgb(var(--c-scrim) / <alpha-value>)',
+        ink: 'rgb(var(--c-ink) / <alpha-value>)'
       },
       fontFamily: {
         sans: ['Inter', 'system-ui', 'sans-serif']
@@ -846,6 +860,7 @@ tailwind.config = {
 | `.btn-primary` | 蓝色背景白字 | 主要操作 |
 | `.btn-secondary` | 灰色背景 | 次要操作 |
 | `.btn-ai` | 紫色背景白字 | AI 相关操作 |
+| `.icon-btn` | 方形图标按钮（约 36×36，悬停灰底） | 顶栏主题按钮 |
 | `.input-field` | 输入框基础样式 | 所有输入框 |
 | `.textarea-field` | 文本域基础样式 | 多行输入 |
 | `.tag` | 标签样式（小字、圆角、灰底） | 笔记标签 |
@@ -863,6 +878,78 @@ tailwind.config = {
 | 平板 | 641px ~ 768px | 6 列网格布局 |
 | 桌面 | > 768px | 12 列网格布局 |
 | 小屏手机 | ≤ 480px | 进一步调整输入区布局 |
+
+---
+
+### 9.4 暗色模式（v2.10.0）
+
+**核心做法：颜色不是写死的，而是 CSS 变量。**
+
+界面上 90% 的颜色都是 Tailwind 的 `gray-*` 和 `bg-white`。逐个加 `dark:` 变体意味着在 4 个文件里
+改约 250 处，漏一处就是一个刺眼的白块；而且**类名一旦改动就会踩到 `classList` 的坑**（见
+`11.1`：`app.js` 里有 `classList.toggle('bg-gray-100')` 这类按类名判断状态的代码）。
+
+所以 `tailwind.config.js` 把颜色接到了变量上：
+
+```javascript
+gray: { 500: 'rgb(var(--c-gray-500) / <alpha-value>)', /* … */ },
+surface: 'rgb(var(--c-surface) / <alpha-value>)',   // 卡片 / 弹窗 / 吸顶吸底栏底色
+scrim:   'rgb(var(--c-scrim) / <alpha-value>)',     // 模态遮罩
+ink:     'rgb(var(--c-ink) / <alpha-value>)'        // 深色浮层（撤销提示）
+```
+
+变量只在 `public/index.html` 里定义两处 —— `:root` 与 `html.dark`。深色下把色阶**倒过来**排
+（50 最暗 = 页面底，900 最亮 = 标题文字），于是浅色里"越深越重"的语义在深色里自动变成"越亮越重"。
+
+| 变量 | 浅色 | 深色 | 用途 |
+| --- | --- | --- | --- |
+| `--c-gray-50` | `#f9fafb` | `#0f172a` | 页面底 |
+| `--c-gray-100` | `#f3f4f6` | `#1e293b` | 次级面 / 标签底 / 日期分组头 |
+| `--c-gray-200` | `#e5e7eb` | `#334155` | 分隔线 / 悬停底 |
+| `--c-gray-300` | `#d1d5db` | `#475569` | 输入框边框 |
+| `--c-gray-400` … `900` | 依次变浅 | 依次变亮 | 文字层级 |
+| `--c-surface` | `#ffffff` | `#1e293b` | 卡片 / 弹窗 / 吸顶吸底栏 |
+| `--c-scrim` | `#6b7280` | `#020617` | 模态遮罩 |
+| `--c-ink` | `#111827` | `#334155` | 深色浮层 |
+
+> **不要对界面元素写不透明的 `bg-white`** —— 那是不会跟着换肤的白块。
+> 卡片/弹窗一律用 `bg-surface`（需要半透明就 `bg-surface/70`）。
+> `bg-white/20` 这种"彩色底上的半透明白"是故意的，不受影响。
+> `test/theme.test.js` 里有一条用例专门拦这个。
+
+少数"彩色浅底"（蓝色选择模式提示条、黄色搜索高亮、绿色热力图）不适合反过来取色，
+单独用 `dark:` 变体处理 —— 这也是 `darkMode: 'class'` 存在的原因。
+
+#### 三个实现细节，改之前务必知道
+
+1. **首次绘制前就要上色**。`public/js/theme-boot.js` 是**普通脚本**（不是 ES 模块）：
+   `<script type="module">` 默认 defer，等 HTML 解析完才执行，那时可能已经画出第一帧了，
+   深夜打开就是一道白光。也不能内联写进 HTML —— CSP 的 `script-src` 只给了 `'self'`，
+   内联脚本会被拒绝执行而且**不报错**。
+   它读的 `localStorage['theme']` 与 `js/theme.js` 必须保持一致（有测试比对）。
+
+2. **换肤的那一瞬间要把 CSS 过渡关掉**。颜色由继承的 CSS 变量算出，而不少元素带
+   `transition-colors/all`。Chromium 在"变量变了 + 该属性正在过渡"时不会把过渡收尾，
+   那些元素会**一直**停在旧颜色上（实测等 400ms 仍是旧色，`.date-header` 就卡在浅色）。
+   `applyTheme()` 因此会先挂上 `html.theme-switching`（对应 CSS 里 `transition: none !important`），
+   强制一次样式重算，再在同一帧内摘掉。桌面自检里读颜色的等待时间只有 120ms，
+   **不要靠调长等待时间来"修好"它**。
+
+3. **桌面端要把选择同步给主进程**。`theme.js` 会调 `window.rfnoter.setThemeSource(mode)`，
+   主进程写 `nativeTheme.themeSource`，这样 Windows 标题栏才跟着变色。
+   注意它同时决定了渲染进程里 `prefers-color-scheme` 的取值，所以"跟随系统"这一档
+   必须原样传 `'system'`，否则会自己骗自己。
+
+#### 开发用参数
+
+```powershell
+# 用独立数据目录跑（正式版正开着时也能跑；也用来保证调试不碰真实笔记）
+electron . --profile-dir=E:\tmp\rfnoter-dev
+
+# 截图：先切到暗色再截，截完把主题偏好写回去
+electron . --screenshot=out.png --dark
+electron . --screenshot=stats.png --dark --stats
+```
 
 ---
 
@@ -1088,6 +1175,36 @@ tailwind.config = {
    组合条目本来就不存在，那正是避免重复计数的办法。
 2. 编辑测试文件时如果用 `old_string` 替换了某个 `test(...)` 的开头行，
    记得把开头行写回去，否则它的函数体会变成孤儿（`Unexpected token '}'`）。
+
+### 11.13 v2.10.0 主要变更（暗色模式）
+
+- **新增 `public/js/theme.js`**：主题模式的纯逻辑（`normalizeMode` / `nextMode` / `resolveTheme`）
+  与 DOM 接线（`initTheme`）。依赖全部由参数注入，与 `initRender` 同样的理由：静态导入的模块
+  在多个测试用例间共享，模块级抓 DOM 会让第二个用例操作到第一个用例的 document。
+  导出 `THEME_STORAGE_KEY = 'theme'`、`THEME_MODES`、`THEME_CYCLE`、`SWITCHING_CLASS`。
+- **新增 `public/js/theme-boot.js`**：普通脚本，首次绘制前读偏好、挂 `html.dark`、设
+  `style.colorScheme`。不能是 ES 模块，也不能内联（CSP）。
+- **`tailwind.config.js`**：`darkMode: 'class'`；`gray-*` 与 `surface` / `scrim` / `ink`
+  改为 `rgb(var(--c-*) / <alpha-value>)`。
+- **`index.html`**：新增主题变量表（`:root` / `html.dark`）、`.theme-switching`、
+  `.icon-btn`、顶栏 `#theme-btn`；所有"不透明白底"改为 `bg-surface`。
+- **`electron/main.js`**：`nativeTheme` 决定窗口首帧底色；新增 IPC `theme:set`；
+  `--profile-dir=<路径>`；`--screenshot` 支持 `--dark`（截完还原偏好）。
+- **`electron/preload.cjs`**：暴露 `setThemeSource(mode)`。
+- **测试**：新增 `test/theme.test.js`（15 条），`app.smoke.test.js` 加 3 条界面用例与
+  1 条作息分布柱子结构的用例。总计 161 → 180。
+- **桌面自检**：36 → 42（暗色 4 条 + 热力图对比度 1 条 + 作息分布柱子高度 1 条）。
+
+**顺带修掉的两个既有缺陷**（都是做视觉检查时发现的，与暗色主题本身无关）：
+
+1. `stats-view.js` 的作息分布：柱子高度是百分比，父级 flex 项高度由内容决定（0），
+   百分比解析成 0 —— 图一直在"渲染成功"但一根柱子都看不见。
+   外层补 `h-full` 让百分比有参照，并加 `data-hourly-bar` 供自检测量真实高度。
+2. 热力图空格的取色。
+
+> **教训**：`bg-gray-100` 在浅色下与白底分得开，在深色下却可能与 `bg-surface` 取到同一个值。
+> 凡是"靠底色差异才能看见"的元素（网格、图表空白格），换肤时必须单独看一眼。
+> 断言"颜色能变"是不够的，还要断言"两处颜色**不相等**"。
 
 ### 11.12 扩展预留接口
 
