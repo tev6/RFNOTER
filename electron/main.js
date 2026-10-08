@@ -8,6 +8,7 @@ import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { createNoteStore } from './store.js';
 import { createLogger, describeError } from './logger.js';
+import { createUpdateChecker, createUpdateState, pickLatestRelease, compareVersions } from './updater.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.dirname(HERE);
@@ -70,8 +71,21 @@ let quitting = false;
  */
 const lastNoteCounts = new Map();
 
+/**
+ * E4 更新检查：最近一次检查的结果，供界面随时查询。
+ *
+ * 放在内存里而不是每次问界面就重查一遍——GitHub 未认证 API 限流 60 次/小时，
+ * 一次检查的结果应该被反复复用（顶栏小圆点 + 打开弹窗都读这一份）。
+ * 结构：null=还没查过 / { ok:false }=查失败 / { ok:true, hasUpdate, ... }
+ */
+let updateStatus = null;
+
 // 日志尽早建立：userData 上面已经钉死了，所以从这一刻起任何异常都能落盘
 const logger = createLogger(path.join(app.getPath('userData'), 'logs'));
+
+// 更新检查器：currentVersion 要等到 whenReady 之后 app.getVersion() 才准，
+// 所以这里先建状态文件读写，检查器在 bootstrap 里再建（见 createUpdateChecker 调用处）。
+const updateState = createUpdateState(path.join(app.getPath('userData'), 'update-state.json'));
 
 // 主进程崩溃/未处理的 Promise 拒绝原本只会打到 stderr，
 // 桌面端用户看不到，等于没记录 —— 这两个是最该留下痕迹的
@@ -313,6 +327,60 @@ function createWindow() {
                             await wait(1200);
                         }
                     }
+                    // 附加 --update：先造一个"有新版本"的状态把圆点与弹窗调出来再截。
+                    // 更新提示在正常运行时**平时是看不见的**（只在查到新版才亮），
+                    // 所以只能靠这个开关在真实渲染里看它长什么样、暗色下清不清楚。
+                    if (process.argv.includes('--update')) {
+                        updateStatus = {
+                            ok: true, hasUpdate: true, muted: false,
+                            currentVersion: app.getVersion(), latestVersion: '99.0.0',
+                            tag: 'v99.0.0', name: 'v99.0.0 排版检查用的假版本',
+                            notes: '新功能\n· 可以检查更新了，发现新版会在顶栏亮起小圆点\n'
+                                + '· 更新说明按纯文本显示，不渲染外部 Markdown\n\n'
+                                + '修复\n· 某些情况下跨夜记录会归错日期',
+                            publishedAt: null,
+                            pageUrl: 'https://github.com/tev6/RFNOTER/releases',
+                            downloadUrl: null, downloadName: null,
+                            downloadSize: 111666621, downloadSizeText: '106.5 MB'
+                        };
+                        // 必须真的走一遍"主进程推送"这条路再把弹窗打开：
+                        // 光给主进程的变量赋值，界面并不知道（它自己那份 status 还是空的），
+                        // 点开弹窗就会显示"没有写更新说明"。这里踩过一次。
+                        broadcastUpdateStatus();
+                        await wait(400);
+                        // 附加 --badge-only：只亮顶栏胶囊、不打开弹窗，方便单独看它。
+                        // 平时用户看到的就是这个状态，弹窗只有主动点才出现。
+                        if (!process.argv.includes('--badge-only')) {
+                            await mainWindow.webContents.executeJavaScript(
+                                "document.getElementById('update-badge')?.click()"
+                            );
+                            await wait(700);
+                        }
+                        // 顺手把弹窗的真实几何打出来：截图只能看大概，
+                        // "有没有超出窗口""按钮在不在可视区内"必须靠数字判断。
+                        const geo = await mainWindow.webContents.executeJavaScript(`(() => {
+                            const modal = document.getElementById('update-modal');
+                            const panel = modal?.querySelector('.bg-surface');
+                            const dl = document.getElementById('update-download-btn');
+                            const dis = document.getElementById('update-dismiss-btn');
+                            const badge = document.getElementById('update-badge');
+                            const r = (el) => { const b = el?.getBoundingClientRect(); return b
+                                ? { top: Math.round(b.top), bottom: Math.round(b.bottom),
+                                    left: Math.round(b.left), right: Math.round(b.right) } : null; };
+                            return {
+                                open: modal ? !modal.classList.contains('hidden') : null,
+                                viewport: { w: window.innerWidth, h: window.innerHeight },
+                                panel: r(panel), download: r(dl), dismiss: r(dis),
+                                // 顶栏胶囊：平时用户看的就是它，必须真的在可视区内、不是零尺寸
+                                badge: r(badge),
+                                badgeVisible: badge ? !badge.classList.contains('hidden') : null,
+                                badgeDisplay: badge ? getComputedStyle(badge).display : null,
+                                badgeText: badge ? badge.textContent.trim() : null,
+                                badgeColor: badge ? getComputedStyle(badge).color : null
+                            };
+                        })()`);
+                        console.log('[RFNOTER] 更新弹窗几何:', JSON.stringify(geo));
+                    }
                     // 附加 --suggest=<文字>：先往标题框里打字把补全浮层调出来再截。
                     // 补全是个"浮"在上面的东西，只有截出来才能确认它没被裁掉、
                     // 没遮住输入框、暗色下也看得清——这些自检的断言都验不了。
@@ -408,6 +476,78 @@ function setAutoLaunch(enabled) {
     });
 }
 
+/* ------------------------------------------------------------------ */
+/* E4 更新检查                                                          */
+/* ------------------------------------------------------------------ */
+
+/** 建检查器。必须在 app.whenReady() 之后——app.getVersion() 那时才准。 */
+function createChecker() {
+    return createUpdateChecker({
+        currentVersion: app.getVersion(),
+        state: updateState,
+        logger
+    });
+}
+
+/** 有新版本时，把结果推给界面（顶栏小圆点亮起来）。 */
+function broadcastUpdateStatus() {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    mainWindow.webContents.send('update-status', updateStatus);
+}
+
+/**
+ * 用户点过「知道了」的版本不要再提示，但**只有那一个版本**被压住。
+ *
+ * 关键：每次拿到结果都重新算一遍，而不是查一次就永久静音。
+ * 否则用户认掉了 2.13.0 之后，2.14.0 出来了也再也不提示——等于关掉了这个功能。
+ * 这里用"记下已知晓的版本号"而不是"关掉检查更新"，就是为了避免这种情况。
+ */
+function applyDismissed(status) {
+    if (!status?.ok || !status.hasUpdate) return status;
+    if (updateState.dismissedVersion() === status.latestVersion) {
+        return { ...status, muted: true };
+    }
+    return status;
+}
+
+/**
+ * 跑一次检查并把结果记下来。
+ *
+ * **这个函数永远不抛异常**：检查更新是纯粹的锦上添花，
+ * 断网、限流、GitHub 改接口都不该影响记录笔记这件正事。
+ */
+async function runUpdateCheck({ force = false } = {}) {
+    try {
+        const result = await createChecker().check({ force });
+        if (result.skipped) {
+            // 被节流：保留上一次的结果（如果有），不要用"跳过"覆盖掉已知的新版本提示
+            return updateStatus;
+        }
+        updateStatus = applyDismissed(result);
+        if (result.ok && result.hasUpdate) {
+            logger.info(`发现新版本 ${result.latestVersion}（当前 ${result.currentVersion}）`
+                + `${updateStatus.muted ? '，但用户已认掉这个版本，不提示' : ''}`);
+        }
+        broadcastUpdateStatus();
+        return updateStatus;
+    } catch (err) {
+        // 理论上 check() 内部已经吃掉了所有异常，这里是最后一道保险
+        logger.error('检查更新时发生意外', err);
+        return updateStatus;
+    }
+}
+
+/**
+ * 启动后延迟一会儿再自动检查。
+ *
+ * 刻意延后：启动那几秒是用户最可能马上开始记录的时候，
+ * 一个网络请求不该和"记一条"抢资源。而且延迟也顺便避开启动时的磁盘备份高峰。
+ * 这个检查受 6 小时节流约束，正常一天最多跑几次。
+ */
+function scheduleStartupUpdateCheck() {
+    setTimeout(() => { runUpdateCheck(); }, 8000);
+}
+
 function buildTray() {
     const image = iconImage('tray.png');
     tray = new Tray(image.isEmpty() ? iconImage('icon.png') : image);
@@ -428,6 +568,20 @@ function buildTray() {
         { label: '打开数据目录', click: () => shell.openPath(store.dataDir) },
         { label: '打开备份目录', click: () => shell.openPath(store.backupsDir) },
         { label: '打开日志目录', click: () => shell.openPath(logger.dir) },
+        { type: 'separator' },
+        // E4：托盘里也能主动查一次（界面上还有顶栏小圆点那条路）。
+        // 查到有新版本就打开窗口把弹窗推给用户，否则只记日志——静默是这里的默认行为。
+        {
+            label: '检查更新',
+            click: async () => {
+                const result = await runUpdateCheck({ force: true });
+                if (result?.ok && result.hasUpdate) {
+                    showWindow();
+                    broadcastUpdateStatus();
+                }
+            }
+        },
+        { label: `版本 ${app.getVersion()}`, enabled: false },
         { type: 'separator' },
         { label: '退出闪录', click: () => { quitting = true; app.quit(); } }
     ]));
@@ -493,6 +647,27 @@ function registerIpc() {
         hotkey: activeHotkey,
         platform: process.platform
     }));
+    // E4：界面问"有没有新版"时读内存里那份结果，不发新请求（限流额度要省着用）。
+    // 返回前重新套一遍"用户已认掉的版本"，否则界面刷新时会把认掉的状态盖掉。
+    ipcMain.handle('update:status', () => applyDismissed(updateStatus));
+    // 用户主动点「检查更新」：force 走 30 秒的短节流，连点不会打光额度。
+    ipcMain.handle('update:check', () => runUpdateCheck({ force: true }));
+    // 「知道了」：记下这个版本别再提示，但下次真有更新的版本仍然会提示。
+    ipcMain.handle('update:dismiss', (_event, version) => {
+        if (typeof version === 'string' && version) {
+            updateState.write({ dismissedVersion: version });
+            logger.info(`用户已知晓版本 ${version}，不再重复提示`);
+        }
+        return true;
+    });
+    // 「去下载」：交给系统浏览器打开 release 页（应用内不做下载）。
+    ipcMain.handle('update:open-download', (_event, url) => {
+        const target = typeof url === 'string' && /^https:\/\/github\.com\//i.test(url)
+            ? url
+            : `https://github.com/tev6/RFNOTER/releases`;
+        shell.openExternal(target);
+        return true;
+    });
 }
 
 async function bootstrap() {
@@ -527,7 +702,12 @@ async function bootstrap() {
 
     logger.info(`启动 v${app.getVersion()}｜数据目录=${store.dataDir}｜热键=${activeHotkey ?? '(未注册)'}`);
 
-    if (!IS_SELFTEST) buildTray();
+    if (!IS_SELFTEST) {
+        buildTray();
+        // E4：启动后延迟自动查一次更新（受 6 小时节流约束）。
+        // 不 await —— 检查更新绝不能拖慢启动，失败也无所谓。
+        scheduleStartupUpdateCheck();
+    }
 }
 
 /* ------------------------------------------------------------------ */
@@ -1117,6 +1297,191 @@ async function runSelfTest() {
             && ceilProbe.m === 0 && ceilProbe.notEarlier === true,
         JSON.stringify(ceilProbe)
     );
+
+    /* --------------------------------------------------------------
+     * E4：更新检查（v2.13.0）
+     *
+     * 这一组要验三件事，缺一不可：
+     *   ① 检查链路真的能通（**打真网络**——假 fetch 只能证明代码接对了，
+     *      证明不了这台机器到 api.github.com 真的走得通。这个项目就因为
+     *      "PowerShell/curl 全被拦、只有 Node 能通"踩过一次）；
+     *   ② 断网/异常时静默降级（绝不能因为查更新失败而报错或卡住）；
+     *   ③ 圆点与弹窗这条 UI 路真的走得通（改的是界面，就得看界面）。
+     *
+     * 放在最后：种的是临时数据、发的是真请求，不该影响前面那些对条数敏感的判断。
+     * -------------------------------------------------------------- */
+
+    // ① 真实网络：直接用主进程的 fetch 问一次 GitHub（不看结果、只看连通性）。
+    // 这一步在 CI（GitHub Actions）与本地都必须通过；不通说明"检查更新"这个功能
+    // 在你机器上根本不可能工作，那是必须先知道的事。
+    let liveNet = { ok: false, detail: '未执行' };
+    try {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 10000);
+        const resp = await fetch(`https://api.github.com/repos/tev6/RFNOTER/releases?per_page=1`, {
+            headers: { 'User-Agent': `RFNOTER/${app.getVersion()}`, Accept: 'application/vnd.github+json' },
+            signal: controller.signal
+        });
+        clearTimeout(timer);
+        const payload = await resp.json();
+        const latest = pickLatestRelease(payload);
+        liveNet = {
+            ok: resp.ok && Boolean(latest),
+            status: resp.status,
+            latest: latest ? latest.version : null,
+            assets: latest ? latest.downloadName : null
+        };
+    } catch (err) {
+        liveNet = { ok: false, detail: describeError(err).slice(0, 160) };
+    }
+    check(
+        'E4 更新检查：能连通 GitHub Releases API 并解析出版本号',
+        liveNet.ok === true,
+        JSON.stringify(liveNet)
+    );
+
+    // 自检环境用独立 userData，状态文件也在这里，绝不会动真实的那份
+    const probeState = createUpdateState(path.join(app.getPath('userData'), 'selftest-update-state.json'));
+
+    // ② 真检查器（真网络）跑一次：当前版本应当被正确识别。
+    // 自检时版本是 2.13.0，线上最新也是某个真实版本，两者一比即可。
+    const realCheck = await createUpdateChecker({
+        currentVersion: app.getVersion(), state: probeState, logger
+    }).check();
+    check(
+        'E4 更新检查：真实检查能给出当前版本与线上版本',
+        realCheck.ok === true && typeof realCheck.latestVersion === 'string'
+            && realCheck.currentVersion === app.getVersion(),
+        JSON.stringify({ ok: realCheck.ok, cur: realCheck.currentVersion, latest: realCheck.latestVersion })
+    );
+    // 版本号必须解析得出来，否则 compareVersions 返回 null，功能等于失效
+    check(
+        'E4 更新检查：线上版本号可比较（不是一堆无法解析的字符）',
+        realCheck.ok === true && compareVersions(realCheck.latestVersion, app.getVersion()) !== null,
+        `latest=${realCheck.latestVersion} current=${app.getVersion()}`
+    );
+    // 状态文件真的被写了（节流要靠它跨进程生效）
+    check(
+        'E4 更新检查：检查时间已落盘（节流下次启动才生效）',
+        probeState.lastCheckAt() > 0,
+        `lastCheckAt=${probeState.lastCheckAt()}`
+    );
+
+    // ③ 离线降级：把 fetch 换成必抛的实现，检查必须"安静地失败"，不能抛。
+    const offlineCheck = await createUpdateChecker({
+        currentVersion: app.getVersion(),
+        state: createUpdateState(path.join(app.getPath('userData'), 'selftest-offline-state.json')),
+        logger,
+        fetchImpl: async () => { throw new Error('ENOTFOUND api.github.com'); }
+    }).check();
+    check(
+        'E4 更新检查：断网时静默失败（ok=false，不抛异常、不影响使用）',
+        offlineCheck.ok === false && typeof offlineCheck.reason === 'string'
+            && offlineCheck.hasUpdate === undefined,
+        JSON.stringify(offlineCheck)
+    );
+
+    // 版本号比较这个最容易写错的地方，在真实进程里再钉一次
+    check(
+        'E4 更新检查：2.13.0 比 2.9.0 新（不是按字符串比）',
+        compareVersions('2.13.0', '2.9.0') > 0 && compareVersions('2.9.0', '2.13.0') < 0
+            && compareVersions('2.13.0', 'latest') === null
+    );
+
+    // ④ 界面这条路：先确认元素就位，再走一遍真实交互（下面那段推送）。
+    // 只看纯函数证明不了 index.html 里那些 id 接对了没有——少一个 id，
+    // getElementById 返回 null，addEventListener 不报错，功能只是"点了没反应"。
+    const updateUiProbe = await win.webContents.executeJavaScript(`(() => {
+        const badge = document.getElementById('update-badge');
+        const modal = document.getElementById('update-modal');
+        return {
+            missing: !badge || !modal,
+            badgeHidden: badge ? badge.classList.contains('hidden') : null,
+            modalHidden: modal ? modal.classList.contains('hidden') : null,
+            hasBridge: typeof window.rfnoter?.onUpdateStatus === 'function',
+            hasStatusApi: typeof window.rfnoter?.updateStatus === 'function'
+        };
+    })()`);
+    check(
+        'E4 更新界面：圆点与弹窗都已就位且默认隐藏',
+        updateUiProbe.missing === false && updateUiProbe.badgeHidden === true
+            && updateUiProbe.modalHidden === true,
+        JSON.stringify(updateUiProbe)
+    );
+    check(
+        'E4 更新界面：preload 暴露了更新状态查询与推送通道',
+        updateUiProbe.hasBridge === true && updateUiProbe.hasStatusApi === true,
+        JSON.stringify(updateUiProbe)
+    );
+
+    // 推送一版"有新版本"，再走真实交互：点圆点 → 弹窗开 → 点知道了 → 圆点灭。
+    // 用 ipcRenderer 那条真实通道推（mainWindow.webContents.send），
+    // 这样验的才是"主进程推 → 界面亮"这条路。
+    mainWindow = win;
+    updateStatus = {
+        ok: true, hasUpdate: true, muted: false,
+        currentVersion: app.getVersion(), latestVersion: '99.0.0',
+        tag: 'v99.0.0', name: 'v99.0.0 自检假版本',
+        notes: '这是自检用的假更新说明。', publishedAt: null,
+        pageUrl: 'https://github.com/tev6/RFNOTER/releases',
+        downloadUrl: null, downloadName: null, downloadSize: null, downloadSizeText: ''
+    };
+    broadcastUpdateStatus();
+    await wait(400);
+
+    const updateFlow = await win.webContents.executeJavaScript(`(async () => {
+        const badge = document.getElementById('update-badge');
+        const modal = document.getElementById('update-modal');
+        const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+        const litAfterPush = !badge.classList.contains('hidden');
+        badge.click();
+        await wait(50);
+        const openedByBadge = !modal.classList.contains('hidden');
+        const versionText = document.getElementById('update-versions').textContent;
+        const notesText = document.getElementById('update-notes').textContent;
+        // 点「知道了」→ 圆点应当灭掉
+        document.getElementById('update-dismiss-btn').click();
+        await wait(150);
+        return {
+            litAfterPush, openedByBadge, versionText, notesText,
+            closedByDismiss: modal.classList.contains('hidden'),
+            badgeClearedByDismiss: badge.classList.contains('hidden')
+        };
+    })()`);
+    check(
+        'E4 更新界面：主进程推来新版本后圆点亮起（不是一进页面就亮）',
+        updateFlow.litAfterPush === true,
+        JSON.stringify(updateFlow)
+    );
+    check(
+        'E4 更新界面：点圆点能打开弹窗并显示版本与说明',
+        updateFlow.openedByBadge === true
+            && /99\.0\.0/.test(updateFlow.versionText)
+            && /自检用的假更新说明/.test(updateFlow.notesText),
+        JSON.stringify(updateFlow)
+    );
+    check(
+        'E4 更新界面：点「知道了」后弹窗关闭且圆点灭掉',
+        updateFlow.closedByDismiss === true && updateFlow.badgeClearedByDismiss === true,
+        JSON.stringify(updateFlow)
+    );
+
+    // 「知道了」必须只压住这一个版本，不能把功能永久静音——
+    // 这是这个功能最容易做错、也最致命的地方（用户以为以后都不会提示了）。
+    const mutedAgain = (() => {
+        const dismissed = updateState.dismissedVersion();
+        const s = { ok: true, hasUpdate: true, latestVersion: '99.0.0' };
+        const mutedNow = dismissed === s.latestVersion;
+        const mutedLater = dismissed === '100.0.0';
+        return { dismissed, mutedNow, mutedLater };
+    })();
+    check(
+        'E4 更新界面：认掉的只是那一个版本，出了更新的版本仍会提示',
+        mutedAgain.mutedNow === true && mutedAgain.mutedLater === false,
+        JSON.stringify(mutedAgain)
+    );
+    // 清掉自检写下的"已知晓"，别让它留在隔离目录外影响下次自检判断
+    try { updateState.write({ dismissedVersion: null }); } catch { /* 无所谓 */ }
 
     check('页面无严重控制台错误', consoleErrors.length === 0, consoleErrors.join(' | ').slice(0, 300));
 

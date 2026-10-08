@@ -22,6 +22,7 @@ import { renderStats, renderActivityHistory } from './stats-view.js';
 import { topActivities, searchSuggestions, applySuggestion } from './suggest.js';
 import { CONFIG, STORE_LABEL, SAFE_ID_RE } from './config.js';
 import { initTheme } from './theme.js';
+import { initUpdateUI } from './update-ui.js';
 import {
     initRender, setRenderHooks, renderNotes, renderNoteElement,
     removeNoteElement, updateEmptyState, setDateGroupCollapsed, expandDateGroup
@@ -104,6 +105,10 @@ const undoToast = document.getElementById('undo-toast');
 const undoToastText = document.getElementById('undo-toast-text');
 const undoToastBtn = document.getElementById('undo-toast-btn');
 const undoToastClose = document.getElementById('undo-toast-close');
+// E4 更新提示弹窗。这里单独抓一次引用，是为了让 Esc 与 anyModalOpen 认得它——
+// 否则它开着的时候按 Esc 没反应，而且会被当成"没有弹窗"从而顺手退出选择模式。
+const updateModal = document.getElementById('update-modal');
+const updateBadge = document.getElementById('update-badge');
 
 /**
  * 统计面板的界面状态（范围、口径、展开了哪些明细、时间轴看哪天）。
@@ -137,6 +142,17 @@ document.addEventListener('DOMContentLoaded', async () => {
         // 主题：读偏好并挂上暗色类、绑定顶栏按钮。放在 try 里是为了
         // 即使数据加载出问题，换肤也不能跟着坏掉。
         initTheme({ button: themeBtn, icon: themeIcon });
+        // E4 更新提示：接线上顶栏小圆点与弹窗。网页端没有桥，initUpdateUI 内部会自己判掉。
+        initUpdateUI({
+            badge: document.getElementById('update-badge'),
+            modal: document.getElementById('update-modal'),
+            titleLabel: document.getElementById('update-title'),
+            versionLabel: document.getElementById('update-versions'),
+            notesLabel: document.getElementById('update-notes'),
+            downloadBtn: document.getElementById('update-download-btn'),
+            dismissBtn: document.getElementById('update-dismiss-btn'),
+            closeBtn: document.getElementById('close-update-btn')
+        });
     } catch (e) {
         console.error('[RFNOTER] 界面初始化失败', e);
     }
@@ -1726,6 +1742,12 @@ function bindEventListeners() {
     });
     noteModal.addEventListener('click', (e) => { if (e.target === noteModal) closeNoteModal(); });
     deleteModal.addEventListener('click', (e) => { if (e.target === deleteModal) closeDeleteModal(); });
+    // 点遮罩关闭更新弹窗（与其他弹窗一致的手感）
+    if (updateModal) {
+        updateModal.addEventListener('click', (e) => {
+            if (e.target === updateModal) updateModal.classList.add('hidden');
+        });
+    }
     document.addEventListener('keydown', (e) => {
         if (e.key !== 'Escape') return;
         // 历史面板是从统计面板里点开的，两层叠着；Esc 先收上面那层
@@ -1744,6 +1766,7 @@ function bindEventListeners() {
         closeBatchTagModal();
         closeStats();
         closeHelpModal();
+        if (updateModal) updateModal.classList.add('hidden');
         if (aiSummaryOpen) closeAISummaryModal();
         if (aiResultOpen) closeAIResultModal();
         else if (!anyOpen && selectionMode) exitSelectionMode();
@@ -1751,7 +1774,7 @@ function bindEventListeners() {
 }
 
 function anyModalOpen() {
-    return [noteModal, deleteModal, helpModal, aiSummaryModal, aiResultModal, batchTagModal, statsModal, historyModal]
+    return [noteModal, deleteModal, helpModal, aiSummaryModal, aiResultModal, batchTagModal, statsModal, historyModal, updateModal]
         .some(modal => modal && !modal.classList.contains('hidden'));
 }
 

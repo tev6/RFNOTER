@@ -52,9 +52,18 @@ export function createLogger(logDir) {
 
     function write(level, message) {
         const line = `[${stamp()}] [${level}] ${message}\n`;
-        // stdout 留着：开发态和 --selftest 能直接看到
-        if (level === 'ERROR') process.stderr.write(line);
-        else process.stdout.write(line);
+        // stdout 留着：开发态和 --selftest 能直接看到。
+        //
+        // **必须包在 try 里**：打包后从资源管理器启动、或把输出重定向到已关闭的管道时，
+        // stdout/stderr 是个坏掉的管道，write() 会**同步抛 EPIPE**。
+        // 而这里正是 globalThis 的 uncaughtException 处理器唯一会调用的地方——
+        // 一旦抛出去就会被 uncaughtException 接住、再记一次、再抛，形成
+        // 「同一个错误刷满整个日志文件」的死循环（实测踩过：日志被 EPIPE 刷爆）。
+        // 写不进控制台不是故障，绝不能让"记日志"这件事本身变成故障源。
+        try {
+            if (level === 'ERROR') process.stderr.write(line);
+            else process.stdout.write(line);
+        } catch { /* 管道断了就只落文件 */ }
         if (!usable) return;
         try {
             rotateIfNeeded();

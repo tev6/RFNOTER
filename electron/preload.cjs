@@ -16,7 +16,15 @@ contextBridge.exposeInMainWorld('rfnoter', {
     openBackupDir: () => ipcRenderer.invoke('app:open-backup-dir'),
     setThemeSource: (mode) => ipcRenderer.invoke('theme:set', mode),
     backupNow: (userId) => ipcRenderer.invoke('app:backup-now', userId),
+    // E4 更新检查：读状态 / 主动查 / 记下已知晓的版本 / 打开下载页
+    updateStatus: () => ipcRenderer.invoke('update:status'),
+    checkUpdate: () => ipcRenderer.invoke('update:check'),
+    dismissUpdate: (version) => ipcRenderer.invoke('update:dismiss', version),
+    openDownload: (url) => ipcRenderer.invoke('update:open-download', url),
     onQuickCapture: (callback) => {
         ipcRenderer.on('quick-capture', () => callback());
+    },
+    onUpdateStatus: (callback) => {
+        ipcRenderer.on('update-status', (_event, status) => callback(status));
     }
 });

@@ -29,7 +29,7 @@
 | 属性 | 值 |
 |------|-----|
 | 项目名称 | RFNOTER（应用内显示名：闪录） |
-| 当前版本 | v2.12.0 |
+| 当前版本 | v2.13.0 |
 | 架构形式 | 模块化前端 + **双运行形态**：Electron 桌面端（默认）/ Express 网页端，共用同一套 `public/` |
 | 技术栈 | HTML5 + Tailwind CSS v3（本地 vendor）+ Font Awesome 4.7（本地 vendor）+ ES6 Modules + Electron 44 / Express 4 |
 | 数据存储 | 桌面端：`%APPDATA%\RFNOTER\data\`；网页端：`data/` 目录；两者都以 localStorage 作为离线副本 |
@@ -565,12 +565,12 @@ export const isDesktopApp = desktopBridge !== null;
 |------|------|
 | 窗口 | 1180×840，`show:false` + `ready-to-show` 再显示；另有 2 秒兜底强制显示，避免「进程活着但看不见窗口」 |
 | 页面加载 | 自定义 `app://` 协议（`registerSchemesAsPrivileged` + `protocol.handle`）。**不能用 `file://`**：Chromium 会拒绝 `fetch` 本地文件（帮助文档会打不开），CSP 的 `'self'` 也失效 |
-| 托盘 | 打开主窗口 / 快速记录 / 开机自启 / 打开数据目录 / 退出；关闭窗口 = 收进托盘 |
+| 托盘 | 打开主窗口 / 快速记录 / 开机自启 / 打开数据目录 / 打开备份目录 / 打开日志目录 / 检查更新 / 版本号 / 退出；关闭窗口 = 收进托盘 |
 | 全局热键 | 依次尝试 `Control+Shift+Space` → `Alt+Shift+N` → `Control+Alt+N`，全部占用时托盘菜单会标注 |
 | 单实例 | `app.requestSingleInstanceLock()`，第二次启动只唤起已有窗口 |
 | 开机自启 | `app.setLoginItemSettings()`，托盘菜单里勾选 |
-| 自检 | `--selftest`：19 项，含真实页面加载、IPC 落盘、布局体检、控制台错误探针 |
-| 调试 | `--layout-debug` 打印窗口/页面布局数据；`--screenshot=<path>` 让 Electron 自己截自己的窗口（比外部截图工具可靠，不受 DPI 缩放影响） |
+| 自检 | `--selftest`：66 项，含真实页面加载、IPC 落盘、布局体检、控制台错误探针、真网络连通性 |
+| 调试 | `--layout-debug` 打印窗口/页面布局数据；`--screenshot=<path>` 让 Electron 自己截自己的窗口（比外部截图工具可靠，不受 DPI 缩放影响）；`--update` / `--badge-only` / `--dark` / `--stats` / `--suggest=` 组合出不同界面状态供截图 |
 
 IPC 通道：
 
@@ -579,9 +579,55 @@ IPC 通道：
 | `notes:read` | renderer → main | `(userId) => {ok, notes, exists}` |
 | `notes:write` | renderer → main | `(userId, notes) => {ok, count?, error?}` |
 | `notes:list-user-ids` | renderer → main | `() => [{userId, mtimeMs, size}]`（按修改时间倒序） |
-| `app:info` | renderer → main | `() => {version, dataDir, hotkey, platform}` |
+| `app:info` | renderer → main | `() => {version, dataDir, logsDir, backupsDir, hotkey, platform}` |
 | `app:open-data-dir` | renderer → main | `() => void` |
+| `app:open-log-dir` | renderer → main | `() => void` |
+| `app:open-backup-dir` | renderer → main | `() => void` |
+| `app:backup-now` | renderer → main | `(userId) => {ok, file, count, valid, skipped}` |
+| `theme:set` | renderer → main | `(mode) => 'system'\|'light'\|'dark'`（同步给 `nativeTheme`） |
+| `update:status` | renderer → main | `() => status \| null`（读内存结果，不发新请求） |
+| `update:check` | renderer → main | `() => status`（手动检查，走 30 秒短节流） |
+| `update:dismiss` | renderer → main | `(version) => true`（记下已认掉的版本号） |
+| `update:open-download` | renderer → main | `(url) => true`（仅允许 `https://github.com/` 前缀） |
 | `quick-capture` | main → renderer | 热键触发，渲染进程收到后聚焦 `#quick-content` |
+| `update-status` | main → renderer | 查到新版本时推送状态，界面据此点亮顶栏胶囊 |
+
+#### `electron/updater.js`（v2.13.0）
+
+更新检查。**只做「检测 + 引导下载」，不做自动安装**——没有代码签名证书时，
+Windows 上的 NSIS 静默安装在签名校验这一步必然失败，且失败发生在下载完
+100MB 之后，对用户是纯损失。因此不引入 `electron-updater`（主进程保持零运行时依赖）。
+
+| 导出 | 说明 |
+|------|------|
+| `parseVersion(raw)` | 解析 `1.2.3` / `v1.2.3` / `1.2.3-beta.1`；不认识返回 `null` |
+| `compareVersions(a, b)` | **逐段数字**比较（`2.13.0 > 2.9.0`）；任一侧解析不了返回 `null` |
+| `pickLatestRelease(payload)` | 从 API 响应里挑最新**正式版**（跳过 draft / prerelease） |
+| `createUpdateState(file)` | 状态文件读写：`lastCheckAt`（节流用）与 `dismissedVersion` |
+| `createUpdateChecker({...})` | `check({force})`，内部注入 `fetchImpl` 便于测试 |
+
+约束：
+
+- **失败一律静默**：断网、超时、限流、响应不可解析都只记日志并返回
+  `{ok:false, reason}`，绝不向上抛。检查更新失败不是错误。
+- **节流必须落盘**：自动 6 小时、手动 30 秒。GitHub 未认证 API 按 IP 限流
+  60 次/小时，不节流会把额度打光。
+- **解析不了的版本号不算「有新版本」**，否则一个畸形 tag 就能天天弹提示。
+- **认证不了就静默**：`dismissedVersion` 只压住那一个版本号，出了更新的版本仍要提示。
+
+> 实现必须放在**主进程**：这台机器上 PowerShell/curl 访问 github.com 全被拦，
+> 只有 Node 的 `fetch` 能通。用外部命令做检查会直接失败。
+
+#### `public/js/update-ui.js`（v2.13.0）
+
+更新提示界面，**纯 UI、不含版本比较**（两边各有一套比较规则迟早会打架）。
+
+- `shouldShowBadge(status)`：只有「查成功 + 有新版本 + 没被认掉」才亮胶囊。
+- `initUpdateUI({...})`：接线顶栏胶囊与弹窗，依赖全部注入（同 `initTheme` 的理由）。
+- 网页端没有 `window.rfnoter`，`initUpdateUI` 内部判掉，不接线也不报错。
+- 更新说明**按纯文本渲染**，不解析 Markdown：内容来自网络，没理由塞进 DOM。
+- 界面另存一份 `dismissedLocally`：状态有两个来源（推送 + 启动时拉取），
+  而拉取是异步的，可能带着旧状态回来把「已认掉」盖掉（有回归用例钉住）。
 
 #### `electron/preload.cjs`
 
@@ -1333,6 +1379,68 @@ electron . --screenshot=stats.png --dark --stats
 碰到时间、时区、跨天这类逻辑，先问「哪个输入会让这段代码算错」，
 而不是「这段代码看起来对吗」。
 
+### 11.16 v2.13.0 主要变更（更新检查 / E4）
+
+目标：让「有新版本了」不再依赖人肉发现。**只做检测 + 引导下载，不做自动安装。**
+
+**为什么不做自动安装**（这条决定了整个设计）：
+
+`electron-updater` 在 Windows 上走 NSIS 静默安装，安装前校验安装包签名。
+没有代码签名证书就必然失败，且失败发生在**已经下载完 100MB 之后**——
+用户白等一场，什么也没得到。所以本版不引入 `electron-updater`
+（主进程继续保持零运行时 npm 依赖），只做「检查 → 提示 → 跳转下载」。
+
+**新增文件**：
+
+| 文件 | 职责 |
+|------|------|
+| `electron/updater.js` | 版本比较、GitHub API 请求、节流、状态落盘（纯函数为主） |
+| `public/js/update-ui.js` | 顶栏胶囊 + 弹窗（纯 UI，**不含版本比较**） |
+| `test/updater.test.js` | 34 条，注入假 `fetch` |
+| `test/update-ui.test.js` | 25 条，jsdom 接线 + 与 `index.html` 的 id 一致性 |
+
+**四条容易做错、且有测试钉住的约束**：
+
+1. **版本比较必须逐段数字比**：`2.13.0 > 2.9.0`。
+   字符串比较会得出相反结论，而这恰好是这个功能最容易埋的坑。
+2. **解析不了的版本号不算「有新版本」**：返回 `null` → 当「无法判断」处理。
+   否则一个畸形 tag 就能天天弹提示。
+3. **「知道了」只压住那一个版本号**：记 `dismissedVersion`，而不是「关闭更新检查」。
+   否则用户认掉 2.13.0 之后，2.14.0 出来也永远不提示——功能等于被永久静音。
+4. **节流必须落盘**：GitHub 未认证 API 按 IP 限流 60 次/小时。
+   自动检查 6 小时一次、手动 30 秒一次，且 `lastCheckAt` 写进
+   `update-state.json`，重启后仍然生效。
+
+**一个环境事实决定了实现位置**：这台机器上 PowerShell / `curl` 访问 github.com
+全部被拦（这也是打包必须先设国内镜像的原因），**只有 Node 的 `fetch` 能通**。
+所以检查只能放主进程里做，用外部命令会直接失败。
+自检里因此有一条**打真网络**的断言——假 `fetch` 只能证明代码接对了，
+证明不了这台机器真的走得通。
+
+**开发过程中自检/截图抓到的三个问题**（照 11.13 的规矩）：
+
+1. **点「知道了」后胶囊自己又亮起来**。状态有两个来源——主进程推送、以及
+   启动时主动拉一次——而"拉"是异步的，可能在用户点完「知道了」之后才返回，
+   带回一份**没有 muted 标记**的旧状态把界面盖回去。
+   > 修法：界面另存一份本地 `dismissedLocally`，任何来源的状态都重新压一遍；
+   > 主进程的 `update:status` 也重新套 `applyDismissed`。
+   > 新增两条回归用例（含"迟到的拉取带来更新版本时仍应重新点亮"的反向保护），
+   > **都做了还原验证：去掉修复即红。**
+
+2. **截图时弹窗显示「这个版本没有写更新说明」**。只给主进程的变量赋值，
+   界面并不知道（它自己那份状态还是空的），必须真的走一遍推送。
+   > 这条是**看截图**发现的——当时所有断言都是绿的。
+   > 正是"界面类改动必须有一次真实渲染的观察"这条准则的价值。
+
+3. **顶栏胶囊像素级不可辨认**。原先是一个图标 + 一个小圆点，截图里
+   像个来路不明的按钮。改成带文字的胶囊。
+   同时补上显式的 `inline-flex`——Tailwind 的 `hidden` 是 `display:none`，
+   光摘掉它会退回 `inline`，图标与文字不居中。
+   > 顺带修掉一处早已存在的文档漂移：README 写「自检 26 项」、本文档写「19 项」，
+   > 实际早已是 54 项。
+
+**测试**：233 → 289（新增 59 条），桌面自检 54 → 66。
+
 ### 11.12 扩展预留接口
 
 | 预留点 | 说明 |
@@ -1341,9 +1449,9 @@ electron . --screenshot=stats.png --dark --stats
 | 拖放功能 | 已完全禁用 |
 | IndexedDB | 当前使用文件系统 + localStorage，可预留迁移接口 |
 | 独立快速捕捉小窗 | 当前热键是「呼出主窗口 + 聚焦输入框」，可改为无边框悬浮窗 |
-| 自动更新 | 未接入 electron-updater |
+| 自动更新 | **已接入检查**（v2.13.0，`electron/updater.js`）；因无代码签名，只做「检测 + 跳转下载」，不做自动安装 |
 
 ---
 
-> 📄 本文档版本：v2.12.0
-> 最后更新：2026-10-06
+> 📄 本文档版本：v2.13.0
+> 最后更新：2026-10-08

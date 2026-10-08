@@ -24,6 +24,7 @@
 | 本地文件，不上云 | 这是私人的生活流水，放在自己机器上最省心 |
 | 不追求"全面"，追求"能坚持" | 自我追踪类工具的头号死因是记录成本，不是功能不足 |
 | **不做标题的结构化解析**（不猜 `30图小河道` 里的"图数/钓点"） | 面向大众就不能替用户规定标题要怎么写；这种约定只在作者自己的语料里成立，对别人是把猜测强加给他 |
+| **更新只做「提示 + 跳转下载」，不做自动安装** | 没有代码签名证书，Windows 上的静默安装必然因签名校验失败，而失败发生在下载完 100MB 之后，对用户是纯损失 |
 
 ## 功能特性
 
@@ -38,6 +39,8 @@
 - **桌面端：托盘常驻 + 全局热键（默认 `Ctrl+Shift+Space`）直接跳到输入框 + 开机自启**
 - 出错时写日志文件（`%APPDATA%\rfnoter\logs\`），托盘菜单可直接打开
 - **暗色模式**：顶栏一键切换「跟随系统 / 常暗 / 常亮」，深夜记录不刺眼
+- **更新检查**：发现新版时顶栏亮起「有新版本」，点开可看更新说明并跳去下载
+  （无代码签名，Windows 上做不到自动安装，所以只提示、不替你装）
 - 响应式设计，支持移动端
 - JSON 文件持久化 + localStorage 离线副本
 
@@ -58,7 +61,7 @@ npm install          # 安装依赖（会下载 Electron 运行时，约 100MB�
 
 ```bash
 npm run app          # 启动桌面应用
-npm run app:selftest # 桌面端自检：26 项，含真实页面 + 落盘链路
+npm run app:selftest # 桌面端自检：66 项，含真实页面 + 落盘链路 + 真网络连通性
 ```
 
 也可以直接用启动器，或者双击桌面上的「RFNOTER 闪录」快捷方式：
@@ -152,6 +155,7 @@ RFNOTER/
 │   ├── main.js                  # 主进程：窗口 / 托盘 / 全局热键 / IPC / 自检
 │   ├── preload.cjs              # contextBridge 暴露 window.rfnoter
 │   ├── store.js                 # 本地文件读写（原子写 + userId 白名单）
+│   ├── updater.js               # 更新检查（版本比较 + GitHub API + 节流）
 │   └── assets/                  # 图标（png / ico）
 ├── server.js                    # 网页端 Express 服务器（createApp / startServer）
 ├── RFNOTER.vbs                  # 双击启动器（纯 ASCII，勿加中文）
@@ -163,12 +167,15 @@ RFNOTER/
 │   ├── js/
 │   │   ├── app.js               # 主应用逻辑
 │   │   ├── utils.js             # 纯函数工具（日期/转义/净化/Markdown）
+│   │   ├── update-ui.js         # 更新提示界面（胶囊 + 弹窗，纯 UI）
 │   │   └── api.js               # 存储适配层（桌面 IPC / 网页 HTTP）+ DeepSeek 调用
 │   └── tailwind.config.js       # Tailwind 配置
-├── test/                        # node:test 测试（52 个用例）
+├── test/                        # node:test 测试（289 个用例）
 │   ├── utils.test.js            # 纯函数
 │   ├── server.test.js           # 路由 / 路径穿越 / 体积上限回归
 │   ├── electron-store.test.js   # 桌面端文件存储
+│   ├── updater.test.js          # 版本比较 / 更新检查（注入假 fetch）
+│   ├── update-ui.test.js        # 更新提示界面（jsdom）
 │   ├── app.smoke.test.js        # jsdom 网页端交互
 │   └── app.desktop.test.js      # jsdom 桌面端（IPC）交互
 ├── RFNOTER-开发规范与API文档.md   # 详细设计与 API 规范

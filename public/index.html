@@ -237,6 +237,21 @@
                 <button id="stats-btn" class="btn btn-secondary text-sm transition-all duration-150" title="看看时间都花在哪了">
                     <i class="fa fa-bar-chart mr-2"></i>统计
                 </button>
+                <!--
+                    E4 更新提示：默认隐藏，主进程查到新版本才亮起来。
+                    刻意不做成"发现新版就弹窗"——记录中的打断成本远大于晚几天升级。
+                    做成带文字的胶囊而不是光秃秃一个圆点：光一个圆点/图标，用户不知道
+                    它是什么（实测截图里就像个来路不明的按钮）。文字＋小圆点最省解释成本。
+                -->
+                <button id="update-badge" type="button"
+                        class="hidden relative items-center px-2 py-1 rounded-md text-sm
+                               text-primary bg-primary/10 hover:bg-primary/20
+                               transition-colors duration-150"
+                        title="有新版本" aria-label="有新版本">
+                    <i class="fa fa-arrow-circle-up mr-1" aria-hidden="true"></i><span>有新版本</span>
+                    <span class="absolute -top-1 -right-1 w-2 h-2 rounded-full bg-red-500"
+                          aria-hidden="true"></span>
+                </button>
                 <button id="selection-toggle-btn" class="btn btn-secondary text-sm transition-all duration-150">
                     <i class="fa fa-check-square-o mr-2"></i>选择笔记
                 </button>
@@ -619,8 +634,48 @@
         </div>
     </div>
 
-    <!-- 批量改标签：只在选择模式下、且有选中项时才会打开 -->
-    <div id="batch-tag-modal" class="fixed inset-0 z-50 hidden overflow-y-auto">
+    <!--
+        E4 更新提示：由 js/update-ui.js 渲染。
+        内容刻意只放纯文本（更新说明是外部内容，不渲染 Markdown）。
+    -->
+    <div id="update-modal" class="fixed inset-0 z-50 hidden overflow-y-auto">
+        <div class="flex items-center justify-center min-h-screen px-4">
+            <div class="fixed inset-0 transition-opacity" aria-hidden="true">
+                <div class="absolute inset-0 bg-scrim opacity-75"></div>
+            </div>
+            <div class="relative inline-block text-left align-bottom transition-all transform bg-surface rounded-lg shadow-xl sm:my-8 sm:align-middle sm:max-w-lg sm:w-full animate-slide-up">
+                <div class="px-4 pt-5 pb-4 bg-surface sm:p-6">
+                    <div class="flex items-start justify-between mb-3">
+                        <h3 id="update-title" class="text-lg font-medium leading-6 text-gray-900">
+                            发现新版本
+                        </h3>
+                        <button id="close-update-btn" class="text-gray-500 hover:text-gray-700 transition-colors duration-150" title="关闭（Esc）">
+                            <i class="fa fa-times"></i>
+                        </button>
+                    </div>
+                    <p id="update-versions" class="text-sm text-gray-600 mb-4"></p>
+                    <div class="max-h-64 overflow-y-auto p-3 bg-gray-50 rounded-md border border-gray-200 mb-4">
+                        <p id="update-notes" class="text-sm text-gray-700 whitespace-pre-wrap"></p>
+                    </div>
+                    <p class="text-xs text-gray-500">
+                        <i class="fa fa-info-circle mr-1"></i>
+                        闪录没有代码签名，Windows 上做不到自动安装，所以这里只能帮你打开下载页；
+                        装新版不会影响已有笔记（数据始终在 <code>%APPDATA%\rfnoter</code>）。
+                    </p>
+                </div>
+                <div class="px-4 py-3 bg-gray-50 sm:px-6 sm:flex sm:flex-row-reverse rounded-b-lg">
+                    <button type="button" id="update-download-btn" class="btn btn-primary transition-all duration-150">
+                        去下载
+                    </button>
+                    <button type="button" id="update-dismiss-btn" class="btn btn-secondary sm:mr-3 transition-all duration-150">
+                        知道了
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 批量改标签：只在选择模式下、且有选中项时才会打开 -->    <div id="batch-tag-modal" class="fixed inset-0 z-50 hidden overflow-y-auto">
         <div class="flex items-center justify-center min-h-screen px-4">
             <div class="fixed inset-0 transition-opacity" aria-hidden="true">
                 <div class="absolute inset-0 bg-scrim opacity-75"></div>
