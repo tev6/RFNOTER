@@ -621,6 +621,7 @@ async function runSelfTest() {
     );
     check('文件位于 userData 目录', path.resolve(store.dataDir) === path.resolve(dataDir), store.dataDir);
 
+
     // 备份（B1）：走真实的 IPC 通道强制备份一次，确认文件真的落到了备份目录里
     const backupResult = await win.webContents.executeJavaScript(
         `window.rfnoter.backupNow(${JSON.stringify(userId)})`
@@ -647,6 +648,56 @@ async function runSelfTest() {
         '写入会自动产生备份（无需手动触发）',
         store.listBackups(userId).length >= 2,
         `备份份数=${store.listBackups(userId).length}`
+    );
+
+    // 时间归属端到端：真的提交一条跨夜记录，看落盘的 date 对不对。
+    // 上面那几条只证了工具函数算得对；这条证的是表单确实把它接上了、
+    // 并且一路写进了文件——那才是用户看到的分组。
+    const crossProbe = await win.webContents.executeJavaScript(`(async () => {
+        const mod = await import('./js/utils.js');
+        const expected = mod.dateStringOfClockInRange('23:50', '00:20');
+        document.getElementById('quick-content').value = '跨夜记录';
+        document.getElementById('quick-time-start').value = '23:50';
+        document.getElementById('quick-time-end').value = '00:20';
+        document.getElementById('quick-add-form')
+            .dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+        return { expected, hour: new Date().getHours() };
+    })()`);
+    await wait(800);
+    const afterCross = store.read(userId);
+    const crossSaved = (afterCross.notes || []).find((n) => n.content === '跨夜记录');
+    check(
+        '时间归属端到端：跨夜记录落盘的 date 与页面判断一致',
+        !!crossSaved && crossSaved.date === crossProbe.expected,
+        `落盘 date=${crossSaved?.date} / 期望 ${crossProbe.expected}（提交时 ${crossProbe.hour} 点）`
+    );
+    check(
+        '时间归属端到端：跨夜记录的起止时间原样保存',
+        crossSaved?.timeStart === '23:50' && crossSaved?.timeEnd === '00:20',
+        `${crossSaved?.timeStart}~${crossSaved?.timeEnd}`
+    );
+    // 清掉探针笔记：走**页面自己的删除入口**（和 A5 撤销用例同一套），
+    // 而不是直接改文件——直接写文件会让文件与页面内存里的 notes 不一致。
+    const crossRemoved = await win.webContents.executeJavaScript(`(async () => {
+        const card = [...document.querySelectorAll('.note-card')]
+            .find((el) => el.textContent.includes('跨夜记录'));
+        if (!card) return { found: false };
+        card.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true }));
+        document.getElementById('delete-note-menu-btn')?.click();
+        document.getElementById('confirm-delete-btn')?.click();
+        await new Promise((r) => setTimeout(r, 700));
+        // 这次删除只是清理，不需要撤销，点 × 认掉
+        document.getElementById('undo-toast-close')?.click();
+        await new Promise((r) => setTimeout(r, 300));
+        return { found: true, left: document.querySelectorAll('.note-card').length };
+    })()`);
+    await wait(400);
+    const onDiskAfter = store.read(userId);
+    check(
+        '时间归属端到端：探针笔记已清掉，文件与页面一致',
+        crossRemoved.found && crossRemoved.left === 1
+            && (onDiskAfter.notes || []).every((n) => n.content !== '跨夜记录'),
+        `found=${crossRemoved.found} 卡片=${crossRemoved.left} 文件剩 ${onDiskAfter.notes?.length} 条`
     );
 
     const saveIndicator = await win.webContents.executeJavaScript(
@@ -1019,6 +1070,52 @@ async function runSelfTest() {
         suggestProbe.nextSegRows > 0 && String(suggestProbe.multiSegValue).startsWith('CS+')
             && String(suggestProbe.multiSegValue).length > 3,
         `候选 ${suggestProbe.nextSegRows} 条 / 结果 "${suggestProbe.multiSegValue}"`
+    );
+
+    // 时间归属（本次修复）：在真实渲染进程里验「凌晨补记跨夜记录」的落库日期。
+    // 这条必须在真实页面里跑——utils 的单测只能证明算法对，
+    // 证明不了 app.js 的表单确实把它接上了。
+    const clockProbe = await win.webContents.executeJavaScript(`(async () => {
+        const out = {};
+        // 直接问页面里的工具函数：凌晨 1:05 时，23:50~00:20 该归哪天
+        const mod = await import('./js/utils.js');
+        const at = (h, m) => { const d = new Date(2026, 4, 14, h, m, 0, 0); return d; };
+        out.crossYesterday = mod.dateStringOfClockInRange('23:50', '00:20', at(1, 5));
+        out.sameDay = mod.dateStringOfClockInRange('00:10', '00:55', at(1, 5));
+        out.dayTime = mod.dateStringOfClockInRange('23:50', '00:20', at(15, 0));
+        return out;
+    })()`);
+    check(
+        '时间归属：凌晨补记跨夜记录归到昨天',
+        clockProbe.crossYesterday === '2026-05-13',
+        `23:50~00:20 @01:05 -> ${clockProbe.crossYesterday}`
+    );
+    check(
+        '时间归属：不跨夜的凌晨记录仍归当天',
+        clockProbe.sameDay === '2026-05-14',
+        `00:10~00:55 @01:05 -> ${clockProbe.sameDay}`
+    );
+    check(
+        '时间归属：白天记跨夜时段不往回挪',
+        clockProbe.dayTime === '2026-05-14',
+        `23:50~00:20 @15:00 -> ${clockProbe.dayTime}`
+    );
+
+    // 取整溢出：23:58 该落到次日 00:00，且不是回绕
+    const ceilProbe = await win.webContents.executeJavaScript(`(async () => {
+        const mod = await import('./js/utils.js');
+        const base = new Date(2026, 4, 14, 23, 58, 0, 0);
+        const ts = mod.ceilToStepTimestamp(base);
+        const d = new Date(ts);
+        return { ts, minutes: mod.ceilToStepMinutes(base), years: d.getFullYear(),
+                 month: d.getMonth() + 1, date: d.getDate(), h: d.getHours(), m: d.getMinutes(),
+                 notEarlier: ts >= base.getTime() };
+    })()`);
+    check(
+        '取整：23:58 取整到次日 00:00，且不早于原时刻',
+        ceilProbe.minutes === 1440 && ceilProbe.date === 15 && ceilProbe.h === 0
+            && ceilProbe.m === 0 && ceilProbe.notEarlier === true,
+        JSON.stringify(ceilProbe)
     );
 
     check('页面无严重控制台错误', consoleErrors.length === 0, consoleErrors.join(' | ').slice(0, 300));

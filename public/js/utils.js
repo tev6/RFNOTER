@@ -54,6 +54,85 @@ export function calculateTimeDuration(startTime, endTime) {
     return duration;
 }
 
+/**
+ * 把「当前时刻」向上取整到 step 分钟的**时间戳**。
+ *
+ * 这段逻辑以前在 app.js 里散了三份，写法都是先算出「分钟数」再交给
+ * `new Date(y, m, d, h, 60)` 或 `setMinutes(60)`。JS 会把它滚成下一小时的
+ * 00 分，多数时候看着是对的（08:58 → 09:00），所以一直没人发现；
+ * 但**小时末会真的出错**：实测 23:58 点「复制」，`duplicateNote` 算出的起点
+ * 变成次日 00:00，于是复制出来的记录被挂到**第二天**（date=次日、
+ * 区间 00:00~00:30），而不是它本来所属的今天。
+ *
+ * 直接对「一天中的第几分钟」取整就不存在这个溢出：1455 → 1440 是合法值，
+ * 换算回时间戳自然就是次日 00:00。
+ *
+ * @param {Date} [date] 基准时刻，默认现在
+ * @param {number} [step] 取整粒度（分钟），默认 5
+ * @returns {number} 取整后的时间戳（毫秒）
+ */
+export function ceilToStepTimestamp(date = new Date(), step = 5) {
+    const size = Number(step) > 0 ? Number(step) : 1;
+    const dayMinutes = date.getHours() * 60 + date.getMinutes();
+    let rounded = Math.ceil(dayMinutes / size) * size;
+    // 秒/毫秒不为零时，"向上"还得再进一格：否则 00:00:30 会被取整成 00:00:00，
+    // 那是往回走——起点落在当前时刻之前，续接会凭空多出半分钟的重叠。
+    if (rounded === dayMinutes && (date.getSeconds() > 0 || date.getMilliseconds() > 0)) {
+        rounded += size;
+    }
+    // setHours 能正确接受 24:00 及以上的分钟数并进位到次日，不是回绕
+    const result = new Date(date);
+    result.setHours(0, rounded, 0, 0);
+    return result.getTime();
+}
+
+/** 「当前时刻向上取整到 5 分钟」的分钟数（0..1440，可能正好是 1440=次日 00:00）。 */
+export function ceilToStepMinutes(date = new Date(), step = 5) {
+    const size = Number(step) > 0 ? Number(step) : 1;
+    const dayMinutes = date.getHours() * 60 + date.getMinutes();
+    let rounded = Math.ceil(dayMinutes / size) * size;
+    // 和 ceilToStepTimestamp 保持同一套口径，否则「现在」按钮与
+    // 「上一条结束续接」会算出差一个粒度的起点
+    if (rounded === dayMinutes && (date.getSeconds() > 0 || date.getMilliseconds() > 0)) {
+        rounded += size;
+    }
+    return rounded;
+}
+
+/**
+ * 一条「HH:MM ~ HH:MM」的记录应该算在哪一天。
+ *
+ * 用户多数在凌晨 1、2 点补记睡前的事（真实数据里 41 条创建于 0-5 点），
+ * 这些记录往往写成 `23:50-00:20`：**开始时间落在前一天**。
+ * 以前 `quickAddNote` 直接 `getCurrentDateString()`，凌晨敲的这条会挂到
+ * 新的一天名下，他得手动开编辑弹窗把日期改回昨天——数据里 5 条错位就是这么来的。
+ *
+ * 规则：以**开始时间**归属；若开始时间明显晚于结束时间（跨夜，如 23:50→00:20），
+ * 且当前处于凌晨，则归到前一天。
+ *
+ * @param {string} startClock 开始 "HH:MM"
+ * @param {string} endClock 结束 "HH:MM"
+ * @param {Date} [now] 当前时刻
+ * @returns {string} YYYY-MM-DD
+ */
+export function dateStringOfClockInRange(startClock, endClock, now = new Date()) {
+    const start = parseClockMinutes(startClock);
+    const end = parseClockMinutes(endClock);
+    const today = getCurrentDateString(now);
+    if (start === null || end === null) return today;
+
+    // 只有「跨夜」的记录（结束早于开始）才需要往回挪一天，
+    // 且只在凌晨补记时挪——白天记 23:50-00:20 属于提前规划，不该动。
+    const crossesMidnight = end < start;
+    const isEarlyMorning = now.getHours() < 5;
+    if (crossesMidnight && isEarlyMorning) {
+        const yesterday = new Date(now);
+        yesterday.setDate(yesterday.getDate() - 1);
+        return getCurrentDateString(yesterday);
+    }
+    return today;
+}
+
 /** "HH:MM" -> 从 0 点开始的分钟数；非法输入返回 null。 */
 export function parseClockMinutes(clock) {
     const matched = /^(\d{1,2}):(\d{2})$/.exec(String(clock ?? '').trim());

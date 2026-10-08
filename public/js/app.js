@@ -2,7 +2,8 @@ import {
     generateUUID, getCurrentDateString, formatRelativeTime, formatDateForDisplay,
     calculateTimeDuration, formatDuration, trimTagToLimit, markdownToHtml,
     isTodayDate, groupNotesByDate, escapeHTML, sanitizeHtml, parseDateString,
-    parseClockMinutes, minutesToClock, countWords
+    parseClockMinutes, minutesToClock, countWords,
+    ceilToStepTimestamp, ceilToStepMinutes, dateStringOfClockInRange
 } from './utils.js';
 import {
     loadNotes, saveNotesToServer, saveNotesLocally, callDeepSeekAPI,
@@ -400,10 +401,23 @@ function handleQuickContentKeydown(event) {
     }
 }
 
-/** 把「今天第 N 分钟」换算成时间戳。 */
-function timestampOfToday(minutes) {
-    const date = new Date();
-    date.setHours(Math.floor(minutes / 60), minutes % 60, 0, 0);
+/**
+ * 把「某一天的某些分钟数」换算成时间戳。
+ *
+ * 以前这里固定用**今天**（`new Date()` 再 setHours），跨天的上一条
+ * （如昨天 23:50 结束、end=1430）会被当成"今天 23:50"。
+ * 实测：凌晨 1:05 看「上一条 00:20 结束」，空档算出来是 **-211635 分钟**，
+ * `formatDuration` 对负数返回「0分钟」，接续提示直接失效。
+ * 跨天时必须以**正确的那个日期**为基准。
+ *
+ * @param {number} minutes 从 0 点开始的分钟数，可 >= 1440（自动进位到次日）
+ * @param {Date} [base] 基准日，默认今天
+ */
+function timestampOfDay(minutes, base = new Date()) {
+    const date = new Date(base);
+    date.setHours(0, 0, 0, 0);
+    // setMinutes 支持溢出进位，1440 会正确变成次日 00:00
+    date.setMinutes(minutes);
     return date.getTime();
 }
 
@@ -411,6 +425,10 @@ function timestampOfToday(minutes) {
  * 今天最后一条笔记的结束时间。
  * 之前续接只依赖内存里的 lastEndTime，重启应用后就断了——这里改成从数据里推导，
  * 让"接着上一条继续记"跨重启也能成立。
+ *
+ * 返回值里的 `base` 是这条结束时刻**真正所在的那一天**：
+ * 跨夜记录（23:50→00:20）的结束落在次日，不能拿「今天」硬套，
+ * 否则算空档时会得到一个负数。
  */
 function getTodayLastEnd() {
     const today = getCurrentDateString();
@@ -423,7 +441,11 @@ function getTodayLastEnd() {
     const start = parseClockMinutes(latest.timeStart);
     const end = parseClockMinutes(latest.timeEnd);
     if (start === null || end === null) return null;
-    return { minutes: end, crossDay: end < start, note: latest };
+    const crossDay = end < start;
+    // 跨天时结束时刻在次日；否则就在这条记录自己的日期
+    const base = parseDateString(latest.date) || new Date();
+    if (crossDay) base.setDate(base.getDate() + 1);
+    return { minutes: end, crossDay, note: latest, base };
 }
 
 /** 刷新接续提示：上一条什么时候结束的、空档多久。 */
@@ -437,7 +459,9 @@ function updateQuickContinuity() {
         return;
     }
     const clock = minutesToClock(last.minutes);
-    const gapMinutes = Math.round((Date.now() - timestampOfToday(last.minutes)) / 60000);
+    // 用这条结束时刻真正所在的那一天算空档，而不是"今天"。
+    // 跨天时（结束在次日 00:20）若按今天算，差值会是负数。
+    const gapMinutes = Math.round((Date.now() - timestampOfDay(last.minutes, last.base)) / 60000);
     if (gapMinutes >= 10) {
         quickContinuityText.textContent = `上一条 ${clock} 结束 · 空档 ${formatDuration(gapMinutes)}`;
         quickContinuityText.className = 'text-xs text-amber-600';
@@ -454,8 +478,7 @@ function fillGapToNow() {
     const last = getTodayLastEnd();
     if (!last) return;
     const startMinutes = last.minutes;
-    const now = new Date();
-    const endMinutes = Math.ceil((now.getHours() * 60 + now.getMinutes()) / 5) * 5;
+    const endMinutes = ceilToStepMinutes();
     document.getElementById('quick-time-start').value = minutesToClock(startMinutes);
     document.getElementById('quick-time-end').value = minutesToClock(Math.max(endMinutes, startMinutes + 5));
     document.getElementById('quick-content').focus();
@@ -481,8 +504,7 @@ function stepTimeInput(inputId, deltaMinutes) {
 
 /** 「现在」：把结束时间设为当前时刻（向上取整到 5 分钟）。 */
 function setEndTimeToNow() {
-    const now = new Date();
-    const rounded = Math.ceil((now.getHours() * 60 + now.getMinutes()) / 5) * 5;
+    const rounded = ceilToStepMinutes();
     setTimeInputTo('quick-time-end', rounded);
     document.getElementById('quick-content').focus();
 }
@@ -499,14 +521,10 @@ function initQuickInput() {
         // 跨重启也能接上：从今天的最后一条推导，而不是只有内存里的 lastEndTime 才算
         const derived = getTodayLastEnd();
         if (derived && !derived.crossDay) {
-            startTime = new Date(timestampOfToday(derived.minutes));
+            startTime = new Date(timestampOfDay(derived.minutes, derived.base));
         } else {
-            startTime = new Date(now);
-            const minutes = startTime.getMinutes();
-            const nextFiveMinute = Math.ceil(minutes / 5) * 5;
-            startTime.setMinutes(nextFiveMinute);
-            startTime.setSeconds(0);
-            startTime.setMilliseconds(0);
+            // 向上取整到 5 分钟：走 ceilToStepTimestamp，23:58 会正确地跨到次日 00:00
+            startTime = new Date(ceilToStepTimestamp(now));
         }
     }
     const endTime = new Date(startTime.getTime() + CONFIG.DEFAULT_DURATION_MINUTES * 60000);
@@ -1234,7 +1252,6 @@ function quickAddNote(e) {
         alert('选择模式下无法添加新笔记，请先退出选择模式');
         return;
     }
-    const date = getCurrentDateString();
     const timeStart = document.getElementById('quick-time-start').value;
     const timeEnd = document.getElementById('quick-time-end').value;
     const content = document.getElementById('quick-content').value.trim();
@@ -1245,6 +1262,10 @@ function quickAddNote(e) {
         alert('请填写完整信息');
         return;
     }
+    // 日期按**输入的时间段**归属，而不是无脑"今天"。
+    // 凌晨 1 点补记 `23:50-00:20` 这种跨夜记录时，它属于昨天——
+    // 以前这里恒取 getCurrentDateString()，用户得手动开编辑弹窗把日期改回去。
+    const date = dateStringOfClockInRange(timeStart, timeEnd);
     const newNote = {
         id: generateUUID(),
         date: date,
@@ -1264,11 +1285,17 @@ function quickAddNote(e) {
     renderNoteElement(newNote);
     updateEmptyState();
     renderQuickPicks();
-    const [hours, minutes] = timeEnd.split(':');
-    const today = new Date();
-    const endTime = new Date(today);
-    endTime.setHours(parseInt(hours), parseInt(minutes), 0, 0);
-    setLastEndTime(endTime.getTime());
+    // lastEndTime 只用来给「下一条」当起点，跨天时要落在正确的日期上：
+    // 直接拿今天 setHours 会把昨天的 00:20 记成今天 00:20，续接就串了
+    const endMinutesOfDay = parseClockMinutes(timeEnd);
+    const endBase = parseDateString(date) || new Date();
+    if (endMinutesOfDay !== null && parseClockMinutes(timeStart) !== null
+        && endMinutesOfDay < parseClockMinutes(timeStart)) {
+        endBase.setDate(endBase.getDate() + 1);   // 跨夜：结束在次日
+    }
+    setLastEndTime(Number.isNaN(endBase.getTime())
+        ? Date.now()
+        : timestampOfDay(endMinutesOfDay ?? 0, endBase));
     document.getElementById('quick-content').value = '';
     document.getElementById('quick-tag').value = '';
     hideSuggestions();
@@ -1478,12 +1505,11 @@ function duplicateNote() {
     }
 
     const durationMinutes = calculateTimeDuration(originalNote.timeStart, originalNote.timeEnd);
-    // 从「当前时间向上取整到 5 分钟」开始，紧挨着排一个等长的时间段
-    const now = new Date();
-    const roundedMinutes = Math.ceil(now.getMinutes() / 5) * 5;
-    const startDate = new Date(
-        now.getFullYear(), now.getMonth(), now.getDate(), now.getHours(), roundedMinutes, 0, 0
-    );
+    // 从「当前时间向上取整到 5 分钟」开始，紧挨着排一个等长的时间段。
+    // 取整走 utils 的 ceilToStepTimestamp：以前这里先算 minutes 再交给
+    // new Date(y, m, d, h, 60)，23:58 会滚成次日 00:00，
+    // 复制出来的记录因此被挂到**第二天**（date=次日、区间 00:00~00:30）。
+    const startDate = new Date(ceilToStepTimestamp(now));
     const startMinutes = startDate.getHours() * 60 + startDate.getMinutes();
     const duplicatedNote = {
         ...originalNote,

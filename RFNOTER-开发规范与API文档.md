@@ -29,7 +29,7 @@
 | 属性 | 值 |
 |------|-----|
 | 项目名称 | RFNOTER（应用内显示名：闪录） |
-| 当前版本 | v2.11.0 |
+| 当前版本 | v2.12.0 |
 | 架构形式 | 模块化前端 + **双运行形态**：Electron 桌面端（默认）/ Express 网页端，共用同一套 `public/` |
 | 技术栈 | HTML5 + Tailwind CSS v3（本地 vendor）+ Font Awesome 4.7（本地 vendor）+ ES6 Modules + Electron 44 / Express 4 |
 | 数据存储 | 桌面端：`%APPDATA%\RFNOTER\data\`；网页端：`data/` 目录；两者都以 localStorage 作为离线副本 |
@@ -76,6 +76,9 @@
 - **v2.11.0**：输入补全（C3，见 §11.14）
   - `suggest.js`（按活动段建词表、给候选、填回输入框）；`stats.js` 新增 `activitiesRaw`
   - 常用条目从"按整条标题"改为"按活动段"统计
+- **v2.12.0**：时间归属与取整修复（见 §11.15）
+  - `utils.js` 新增 `ceilToStepTimestamp` / `ceilToStepMinutes` / `dateStringOfClockInRange`
+  - 修掉三个只在跨天/凌晨触发、且不抛异常的缺陷
 
 ---
 
@@ -105,6 +108,7 @@ RFNOTER/
 │   ├── electron-store.test.js
 │   ├── server.test.js
 │   ├── suggest.test.js         # 输入补全纯逻辑（v2.11.0）
+│   ├── time-attribution.test.js # 时间归属与 5 分钟取整（v2.12.0）
 │   ├── app.smoke.test.js       # jsdom：网页端
 │   └── app.desktop.test.js     # jsdom：桌面端（IPC）
 ├── data/                       # 网页端数据目录（运行时创建）
@@ -1275,6 +1279,60 @@ electron . --screenshot=stats.png --dark --stats
    两处修完都做了反向验证（把改动还原、确认断言确实变红），
    否则无法区分"测试真的有效"和"测试只是恰好是绿的"。
 
+### 11.15 v2.12.0 主要变更（时间归属与取整）
+
+这一版没有新功能，全部是排查「时间是怎么生成和归类的」时挖出来的缺陷。
+它们有三个共同点：**只在跨天/凌晨触发**、**此前没有任何测试覆盖**、**错了也不会报错**。
+
+- **新增 `utils.js` 的三个纯函数**（原先把这套逻辑散在 `app.js` 里三份，
+  三份带着同一个缺陷——集中到一处才谈得上测）：
+
+  | 导出 | 职责 |
+  |------|------|
+  | `ceilToStepTimestamp(date, step)` | 向上取整到 5 分钟，返回**时间戳**（可跨天） |
+  | `ceilToStepMinutes(date, step)` | 同上，返回「一天中的第几分钟」（0..1440） |
+  | `dateStringOfClockInRange(start, end, now)` | 由时间段决定这条记录归哪天 |
+
+- **`app.js`**：
+  - `quickAddNote` 的 `date` 改为 `dateStringOfClockInRange(timeStart, timeEnd)`，
+    不再无条件 `getCurrentDateString()`。
+  - 新增 `timestampOfDay(minutes, base)`，`getTodayLastEnd()` 额外返回
+    `base`（结束时刻真正所在的那一天）与 `crossDay`；`updateQuickContinuity`
+    与 `fillGapToNow` 都用它算空档。
+  - `duplicateNote` 与 `initQuickInput` 的取整改走 `ceilToStepTimestamp`。
+  - 保存后设置 `lastEndTime` 时，跨夜记录要落在次日（原先一律套「今天」）。
+
+- **测试**：新增 `test/time-attribution.test.js`（13 条），总计 220 → 233；
+  桌面自检 47 → 54。
+
+**三个缺陷的成因，以及为什么以前没人发现：**
+
+1. **`date` 无条件取「今天」**。凌晨补记 `23:50 ~ 00:20` 时，这条记录属于昨天，
+   却会被挂到今天，用户得手动开编辑弹窗改回去。
+   > 真实数据里 1156 条中有 41 条创建于 0-5 点，其中 5 条的 `date` 与创建日不同——
+   > 那正是用户手动改过的痕迹。**从数据里能读出"这里很烦"，而不只是"这里错了"。**
+
+2. **5 分钟向上取整用「分钟数」做中间量**，`ceil(58/5)*5 = 60`，
+   再交给 `new Date(y, m, d, 23, 60)` 或 `setMinutes(60)`。
+   JS 会把它滚成次日 00:00——多数时候（08:58 → 09:00）看着是对的，
+   **只有小时末才暴露**：23:58 点「复制」，复制出来的记录变成次日 00:00~00:30。
+   > 修法不是加一个 `if (minutes === 60)`，而是换成**不存在溢出的表示**：
+   > 直接对「一天中的第几分钟」取整，1455 → 1440 是合法值。
+
+3. **跨天记录的结束时间被硬套到「今天」**再算差值，
+   凌晨看昨天的记录会得到 `-211635` 分钟；`formatDuration` 对负数返回「0分钟」，
+   于是接续提示静默失效——**不报错，只是不再提示**。
+
+**反向验证（照 11.13 的规矩）**：三处修复都做了「还原 → 确认断言变红」。
+还原 `dateStringOfClockInRange` 后，单测红 3 条、桌面自检红 1 条
+（`23:50~00:20 @01:05 -> 2026-05-14`，与预期的 `2026-05-13` 不符）。
+没做这一步，就无法区分"测试有效"和"测试恰好是绿的"。
+
+**一条留给以后的判断**：这几个缺陷都满足「**只在少数时刻触发 + 不抛异常**」，
+这种缺陷永远不会被"跑一遍没问题"发现。
+碰到时间、时区、跨天这类逻辑，先问「哪个输入会让这段代码算错」，
+而不是「这段代码看起来对吗」。
+
 ### 11.12 扩展预留接口
 
 | 预留点 | 说明 |
@@ -1287,5 +1345,5 @@ electron . --screenshot=stats.png --dark --stats
 
 ---
 
-> 📄 本文档版本：v2.11.0
+> 📄 本文档版本：v2.12.0
 > 最后更新：2026-10-06
