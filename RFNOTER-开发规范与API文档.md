@@ -29,7 +29,7 @@
 | 属性 | 值 |
 |------|-----|
 | 项目名称 | RFNOTER（应用内显示名：闪录） |
-| 当前版本 | v2.9.0 |
+| 当前版本 | v2.11.0 |
 | 架构形式 | 模块化前端 + **双运行形态**：Electron 桌面端（默认）/ Express 网页端，共用同一套 `public/` |
 | 技术栈 | HTML5 + Tailwind CSS v3（本地 vendor）+ Font Awesome 4.7（本地 vendor）+ ES6 Modules + Electron 44 / Express 4 |
 | 数据存储 | 桌面端：`%APPDATA%\RFNOTER\data\`；网页端：`data/` 目录；两者都以 localStorage 作为离线副本 |
@@ -71,6 +71,11 @@
 - **v2.9.0**：撤销删除（A5）
   - `app.js`：`recordDeletion` / `undoLastDeletion` / `commitUndo`，后进先出的撤销栈 + 10 秒窗口
   - 只存笔记副本、不记"原来排第几"——显示顺序由 `createdAt` 决定，并回数组位置自然就对
+- **v2.10.0**：暗色模式（D4，见 §9.4 与 §11.13）
+  - `theme.js` / `theme-boot.js`；主题色改为 CSS 变量驱动，约 250 处颜色类一处不改就换肤
+- **v2.11.0**：输入补全（C3，见 §11.14）
+  - `suggest.js`（按活动段建词表、给候选、填回输入框）；`stats.js` 新增 `activitiesRaw`
+  - 常用条目从"按整条标题"改为"按活动段"统计
 
 ---
 
@@ -93,11 +98,13 @@ RFNOTER/
 │       ├── utils.js            # 工具函数
 │       ├── theme.js            # 主题（亮/暗/跟随系统）逻辑与接线（v2.10.0）
 │       ├── theme-boot.js       # 普通脚本：首次绘制前挂 html.dark（v2.10.0）
+│       ├── suggest.js          # 输入补全：活动词表 / 候选 / 填回输入框（v2.11.0）
 │       └── api.js              # 存储适配层 + DeepSeek 调用
-├── test/                       # node:test 测试（180 个用例）
+├── test/                       # node:test 测试（215 个用例）
 │   ├── utils.test.js
 │   ├── electron-store.test.js
 │   ├── server.test.js
+│   ├── suggest.test.js         # 输入补全纯逻辑（v2.11.0）
 │   ├── app.smoke.test.js       # jsdom：网页端
 │   └── app.desktop.test.js     # jsdom：桌面端（IPC）
 ├── data/                       # 网页端数据目录（运行时创建）
@@ -1206,6 +1213,68 @@ electron . --screenshot=stats.png --dark --stats
 > 凡是"靠底色差异才能看见"的元素（网格、图表空白格），换肤时必须单独看一眼。
 > 断言"颜色能变"是不够的，还要断言"两处颜色**不相等**"。
 
+### 11.14 v2.11.0 主要变更（输入补全）
+
+- **新增 `public/js/suggest.js`**（纯逻辑，只依赖 `stats.js`，可脱离浏览器单测）：
+  | 导出 | 职责 |
+  |------|------|
+  | `buildVocabulary(notes)` | 按**活动段**建词表：归一化后作去重键，但保留一种**原始写法**作展示值 |
+  | `topActivities(notes, {limit})` | 常用条目（词频 + 最近 7 天加权，只取出现 ≥ 2 次的） |
+  | `currentFragment(text)` | 光标所在的那一段（最后一个分隔符之后），返回 `{index, fragment, prefix}` |
+  | `searchSuggestions(notes, text, {limit})` | 给候选：前缀命中优先于子串命中，再比分数 |
+  | `applySuggestion(text, label)` | 只替换当前段，保留前后的内容与分隔符原文 |
+  | `remainderOf(label, text)` | "还差几个字"，供灰字预览 |
+- **`stats.js` 新增 `activitiesRaw(raw)`**：与 `activitiesInOrder` 共用同一个
+  `ACTIVITY_SEPARATORS` 定义，区别是**不归一化**（保留大小写与全角）。
+  补全必须用它——`activitiesInOrder` 会先 `normalizeText`，用户写的 `CSGO`
+  会被还原成 `csgo` 填回输入框。
+- **`app.js`**：`computeQuickPicks` 改为委托 `topActivities`（原来按整条 `content`
+  聚合，`B站+吃饭` 与 `吃饭+B站` 会被算成两件事）；新增
+  `renderSuggestions` / `hideSuggestions` / `highlightSuggestion` /
+  `acceptSuggestion` / `handleQuickContentKeydown`，在 `bindEventListeners` 里接线。
+- **`index.html`**：标题输入框外层加 `relative`，新增 `#quick-suggest` 浮层
+  （`absolute top-full`，不占布局高度）；输入框加 `autocomplete="off"`。
+- **测试**：新增 `test/suggest.test.js`（29 条）；`app.smoke.test.js` 加 6 条
+  界面用例。总计 180 → 215。
+- **桌面自检**：42 → 47（新增 5 条，验浮层落在输入框下方、多段补全、Esc 收起）。
+
+**三个非显而易见的取舍**（都踩过或差点踩坑）：
+
+1. **候选的匹配串必须归一化，展示串必须不归一化**。两者混用会出两种相反的错误：
+   拿归一化串展示 → 用户的 `CSGO` 被改成 `csgo`；
+   拿原文匹配 → 全角 `ＰＳ` 永远匹配不上半角输入 `ps`。
+   所以 `buildVocabulary` 里"键归一化、值保留原文"，比较时对 label 再归一化一次。
+2. **"已经打完这一整段"不能用归一化后的相等来判断**。用户打半角 `ps`、词是 `ＰＳ`，
+   归一化后相等，但写法不同，仍然应该提示（选它就能统一成全角那个写法）。
+   判断要用**原文**比较。
+3. **浮层的点击必须绑 `mousedown` 而不是 `click`**：`click` 之前输入框会先失焦，
+   而失焦会关掉浮层，于是 `click` 永远落空。
+
+> **教训（自检的顺序）**：C3 的自检必须往隔离库里种几条笔记才有候选可补，
+> 而种数据会改变笔记条数。第一版把它插在自检中段，直接带偏了后面
+> 「撤销」那组对条数敏感的断言（`before === 1` 变成 `before === 4`）。
+> **凡是要改共享状态的自检，放到末尾**，比写清理代码更省事也更可靠。
+> 另一个坑：撤销提示上的 `#undo-toast-btn` 是**撤销按钮**，
+> 用来"认了这次删除"的是 `#undo-toast-close`（那个 ×）——用错等于刚删就恢复。
+
+**用真实数据（1151 条）回放时抓出来的两个缺陷**，都很值得记住：
+
+1. **两处用了两套标准**。`topActivities` 有 `count >= MIN_SUGGEST_COUNT`，
+   `searchSuggestions` 却直接遍历整个词表。同一个概念（"什么算值得提示的"）
+   写在两个地方就一定会漂。真实数据里 74% 的段只出现 1 次，
+   它们把 `Claude被封号`(1 次) 顶到了 `Coding`(5 次) 前面。
+   > 修法不是"再补一个判断"，而是让两个入口都走同一个门槛常量。
+2. **断言验了实现方向，没验用户可见性**。浮层用 `top-full`（朝下展开），
+   而输入区钉在页面底部——实测视口高 739px 时浮层底边到了 976px，
+   超出下沿 237px，8 条候选几乎全被窗口切掉。
+   但自检写的是 `boxRect.top >= inputRect.bottom`（"在下方"），
+   **这句话确实成立，所以断言是绿的**。
+   > 形状类断言要写成"用户能不能看见"：`boxRect.bottom <= window.innerHeight`。
+   > 只验相对位置，等于没验。
+
+   两处修完都做了反向验证（把改动还原、确认断言确实变红），
+   否则无法区分"测试真的有效"和"测试只是恰好是绿的"。
+
 ### 11.12 扩展预留接口
 
 | 预留点 | 说明 |
@@ -1218,5 +1287,5 @@ electron . --screenshot=stats.png --dark --stats
 
 ---
 
-> 📄 本文档版本：v2.9.0
+> 📄 本文档版本：v2.11.0
 > 最后更新：2026-10-06

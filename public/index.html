@@ -327,8 +327,20 @@
                                     title="把结束时间设为现在（常用于补记刚做完的事）">现在</button>
                         </div>
                     </div>
-                    <div class="col-span-4 md:col-span-4 lg:col-span-4">
-                        <input type="text" id="quick-content" class="input-field" placeholder="输入笔记标题" required>
+                    <div class="col-span-4 md:col-span-4 lg:col-span-4 relative">
+                        <input type="text" id="quick-content" class="input-field" placeholder="输入笔记标题" required
+                               autocomplete="off" title="输入时会从以前记过的内容里给提示，Enter 或 Tab 采纳，Esc 关闭">
+                        <!--
+                            补全下拉：绝对定位浮在输入框**上方**，不占布局高度
+                            （否则出现候选时整行会往下跳、鼠标位置跟着变）。
+
+                            为什么朝上而不是朝下：输入区钉在页面底部，输入框下沿
+                            离窗口下沿只剩 20 多像素，朝下展开会被窗口切掉大半。
+                            实测（视口高 739px）：朝下时浮层底边到 976px，
+                            超出下沿 237px，8 条候选里能看见的不到 1 条。
+                        -->
+                        <div id="quick-suggest" class="hidden absolute left-0 right-0 bottom-full mb-1 z-30
+                                    rounded-md border border-gray-300 bg-surface shadow-lg overflow-hidden"></div>
                     </div>
                     <div class="col-span-1 md:col-span-2 lg:col-span-1">
                         <input type="text" id="quick-tag" class="input-field" placeholder="标签">

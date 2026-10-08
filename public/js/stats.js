@@ -95,6 +95,20 @@ export function activitiesInOrder(raw) {
         .filter(Boolean);
 }
 
+/**
+ * 按**原始书写顺序**拆出活动，且**保留用户的原始写法**（不动大小写与全角）。
+ *
+ * 与 activitiesInOrder 共用同一个分隔符定义，所以拆法完全一致；差别只在这个
+ * 不归一化。补全功能需要它：归一化会小写化，若拿归一化后的段去填输入框，
+ * 用户写的 `CSGO` 会被悄悄改成 `csgo`——他记的是自己的账，用词不该被工具改掉。
+ */
+export function activitiesRaw(raw) {
+    return String(raw ?? '')
+        .split(ACTIVITY_SEPARATORS)
+        .map((part) => part.trim())
+        .filter(Boolean);
+}
+
 /** 一条笔记的时长（分钟），跨天按绕圈算。 */
 export function noteDurationMinutes(note) {
     const start = parseClockMinutes(note?.timeStart);

@@ -556,6 +556,128 @@ test('常用条目：双击 chip 直接记录一条笔记', async () => {
     assert.equal(document.querySelectorAll('.note-card').length, before + 1);
 });
 
+/* ---------------- v2.11.0：输入补全 ---------------- */
+
+/** 模拟在标题框里打字。 */
+function typeQuickContent(document, window, value) {
+    const input = document.getElementById('quick-content');
+    input.value = value;
+    input.dispatchEvent(new window.Event('input', { bubbles: true }));
+    return input;
+}
+
+test('输入补全：打字时给出候选，候选按常用度排', async () => {
+    const notes = [];
+    for (let i = 0; i < 5; i += 1) notes.push(makeNote({ id: `b-${i}`, content: 'B站', createdAt: i }));
+    for (let i = 0; i < 2; i += 1) notes.push(makeNote({ id: `b2-${i}`, content: 'B站直播', createdAt: 100 + i }));
+    const { document, window } = await bootApp({ serverNotes: notes });
+
+    typeQuickContent(document, window, 'B');
+    const rows = [...document.querySelectorAll('#quick-suggest .suggest-row')];
+    assert.ok(rows.length > 0, '应当出现候选');
+    assert.match(rows[0].textContent, /B站/, '最常用的排最前');
+});
+
+test('输入补全：点候选把内容填回输入框', async () => {
+    const notes = [];
+    for (let i = 0; i < 3; i += 1) notes.push(makeNote({ id: `t-${i}`, content: '终末地', createdAt: i }));
+    const { document, window } = await bootApp({ serverNotes: notes });
+
+    typeQuickContent(document, window, '终');
+    const row = document.querySelector('#quick-suggest .suggest-row');
+    assert.ok(row, '应当有候选');
+    // 用 mousedown：click 之前输入框会先失焦、下拉就没了
+    row.dispatchEvent(new window.MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+
+    assert.equal(document.getElementById('quick-content').value, '终末地');
+});
+
+test('输入补全：Enter 采纳候选，而不是把半截标题提交掉', async () => {
+    const notes = [];
+    for (let i = 0; i < 3; i += 1) notes.push(makeNote({ id: `d-${i}`, content: '多邻国', createdAt: i }));
+    const { document, window, state } = await bootApp({ serverNotes: notes });
+    const before = state.serverNotes.length;
+
+    const input = typeQuickContent(document, window, '多');
+    input.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
+    await flush(50);
+
+    assert.equal(input.value, '多邻国', '应当补全');
+    assert.equal(state.serverNotes.length, before, '有候选时 Enter 不该提交笔记');
+});
+
+test('输入补全：Escape 关掉候选，且不影响输入内容', async () => {
+    const notes = [];
+    for (let i = 0; i < 3; i += 1) notes.push(makeNote({ id: `e-${i}`, content: '吃饭', createdAt: i }));
+    const { document, window } = await bootApp({ serverNotes: notes });
+
+    const input = typeQuickContent(document, window, '吃');
+    assert.ok(document.querySelector('#quick-suggest .suggest-row'), '先确认有候选');
+
+    input.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+    assert.equal(document.getElementById('quick-suggest').classList.contains('hidden'), true, '候选应关闭');
+    assert.equal(input.value, '吃', '输入内容不该被清掉');
+});
+
+test('输入补全：多段输入时补的是当前那一段，前面的段保留', async () => {
+    const notes = [];
+    for (let i = 0; i < 3; i += 1) notes.push(makeNote({ id: `m-${i}`, content: 'CS+B站', createdAt: i }));
+    const { document, window } = await bootApp({ serverNotes: notes });
+
+    // 用户先打 CS+，此时提示下一段
+    typeQuickContent(document, window, 'CS+');
+    const first = document.querySelector('#quick-suggest .suggest-row');
+    assert.ok(first, '打完分隔符也应当有候选');
+    first.dispatchEvent(new window.MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+
+    const value = document.getElementById('quick-content').value;
+    assert.ok(value.startsWith('CS+'), `前面的段要被保留，实际是 ${value}`);
+    assert.ok(value.length > 3, `应当补上了下一段，实际是 ${value}`);
+});
+
+test('输入补全：浮层挂在输入框上方，不会捅出窗口下沿', async () => {
+    // 输入区钉在页面底部，浮层朝下展开会被窗口切掉大半。
+    // jsdom 不做布局（getBoundingClientRect 全是 0），这里验不了像素，
+    // 所以只钉住"定位类"：必须是 bottom-full（朝上）而不是 top-full（朝下）。
+    // 真正的像素级可见性由 electron 自检的 C3 用例负责。
+    const notes = [];
+    for (let i = 0; i < 3; i += 1) notes.push(makeNote({ id: `u-${i}`, content: 'CS', createdAt: i }));
+    const { document } = await bootApp({ serverNotes: notes });
+
+    const box = document.getElementById('quick-suggest');
+    assert.ok(box.classList.contains('absolute'), '必须是绝对定位，否则会推挤整行布局');
+    assert.ok(box.classList.contains('bottom-full'), '必须朝上展开（bottom-full）');
+    assert.ok(!box.classList.contains('top-full'), '不能朝下展开，会被窗口下沿切掉');
+    assert.equal(box.parentElement.id, '', '浮层的父级要是输入框的定位容器');
+    assert.ok(box.parentElement.classList.contains('relative'), '父级必须 relative 才有定位参照');
+});
+
+test('输入补全：浮层初始是收起的', async () => {
+    const { document } = await bootApp({ serverNotes: [makeNote({ content: 'CS' })] });
+    assert.equal(document.getElementById('quick-suggest').classList.contains('hidden'), true);
+});
+
+test('输入补全：输入框关掉了浏览器自动填充（会和我们的补全打架）', async () => {
+    const { document } = await bootApp({ serverNotes: [makeNote({ content: 'CS' })] });
+    assert.equal(document.getElementById('quick-content').getAttribute('autocomplete'), 'off');
+});
+
+test('输入补全：提交成功后候选收起、输入框清空', async () => {
+    const notes = [];
+    for (let i = 0; i < 3; i += 1) notes.push(makeNote({ id: `s-${i}`, content: '洗澡', createdAt: i }));
+    const { document, window, state } = await bootApp({ serverNotes: notes });
+
+    typeQuickContent(document, window, '洗澡');
+    const before = state.serverNotes.length;
+    document.getElementById('quick-add-form')
+        .dispatchEvent(new window.Event('submit', { bubbles: true, cancelable: true }));
+    await flush(80);
+
+    assert.equal(state.serverNotes.length, before + 1, '应当记下一条');
+    assert.equal(document.getElementById('quick-content').value, '', '标题框应清空');
+    assert.equal(document.getElementById('quick-suggest').classList.contains('hidden'), true, '候选应收起');
+});
+
 test('时间接续：显示上一条结束与空档，「补记空档」把起止时间铺满空白', async () => {
     const RealDate = globalThis.Date;
     const FIXED = new RealDate(2026, 9, 6, 14, 0, 0); // 本地时间 2026-10-06 14:00

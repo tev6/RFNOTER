@@ -18,6 +18,7 @@ import {
     activityHistory, activitiesInOrder
 } from './stats.js';
 import { renderStats, renderActivityHistory } from './stats-view.js';
+import { topActivities, searchSuggestions, applySuggestion } from './suggest.js';
 import { CONFIG, STORE_LABEL, SAFE_ID_RE } from './config.js';
 import { initTheme } from './theme.js';
 import {
@@ -228,33 +229,18 @@ async function initializeNotes() {
 
 /**
  * 从历史笔记里算出「常用条目」。
- * 依据：1133 条真实数据里 40.5% 的标题是重复的（CS 用了 146 次、B站 90 次），
- * 而这些重复正是每天 11.7 次录入里最浪费时间的部分。
- * 数据全部现算，不新增存储、不需要迁移。
+ *
+ * 聚合口径统一挪到了 suggest.js 的 topActivities：它按**活动段**统计，
+ * 而不是按整条标题。这个区别在真实数据上非常明显（1151 条、36% 含 `+`）：
+ *
+ *   按整条标题：CS(147) B站(92) 30图小河道表水(22) 34竹刀(16) B站+吃饭(9) …
+ *   按活动段：  B站(289) CS(161) 吃饭(65) 终末地(44) 听音乐(35) …
+ *
+ * 老口径把 `B站+吃饭` 和 `吃饭+B站` 当成两个独立项，`B站` 的真实热度被拆散，
+ * `吃饭`（其实 65 次）连榜都进不去。数据全部现算，不新增存储、不需要迁移。
  */
 function computeQuickPicks(limit = 8) {
-    const stats = new Map();
-    for (const note of notes) {
-        const key = (note.content || '').trim();
-        if (!key) continue;
-        const entry = stats.get(key) || { count: 0, lastUsedAt: 0 };
-        entry.count += 1;
-        entry.lastUsedAt = Math.max(entry.lastUsedAt, Number(note.createdAt) || 0);
-        stats.set(key, entry);
-    }
-    const now = Date.now();
-    const week = 7 * 86400000;
-    return [...stats.entries()]
-        .filter(([, entry]) => entry.count >= 2)   // 只用过一次的不算"常用"
-        .map(([content, entry]) => ({
-            content,
-            count: entry.count,
-            lastUsedAt: entry.lastUsedAt,
-            // 频率为主；最近一周用过的额外加权，避免旧习惯长期占位
-            score: entry.count + (now - entry.lastUsedAt < week ? 3 : 0)
-        }))
-        .sort((a, b) => b.score - a.score || b.lastUsedAt - a.lastUsedAt)
-        .slice(0, limit);
+    return topActivities(notes, { limit });
 }
 
 function renderQuickPicks() {
@@ -266,15 +252,15 @@ function renderQuickPicks() {
         quickPicks.classList.remove('flex');
         return;
     }
-    picks.forEach(({ content, count }) => {
+    picks.forEach(({ label, count }) => {
         const chip = document.createElement('button');
         chip.type = 'button';   // 必须在表单外/非 submit，否则点一下就把笔记提交了
         chip.className = 'px-2.5 py-1 text-xs rounded-full bg-surface border border-gray-300 text-gray-700 hover:border-primary hover:text-primary transition-colors duration-150';
-        chip.textContent = content;
+        chip.textContent = label;
         chip.title = `用过 ${count} 次 · 点击填入，双击直接记录`;
-        chip.addEventListener('click', () => fillQuickContent(content));
+        chip.addEventListener('click', () => fillQuickContent(label));
         chip.addEventListener('dblclick', () => {
-            fillQuickContent(content);
+            fillQuickContent(label);
             if (typeof quickAddForm.requestSubmit === 'function') quickAddForm.requestSubmit();
         });
         quickPicks.appendChild(chip);
@@ -288,6 +274,130 @@ function fillQuickContent(content) {
     if (!input) return;
     input.value = content;
     input.focus();
+    hideSuggestions();
+}
+
+/* ------------------------------------------------------------------ */
+/* 输入补全：把"以前记过的"变成少打几个字                                */
+/* ------------------------------------------------------------------ */
+
+/** 当前候选列表与选中项。选中项用键盘上下键移动，-1 表示没选。 */
+let suggestItems = [];
+let suggestIndex = -1;
+
+/**
+ * 重画补全下拉。
+ *
+ * 候选为空时整体隐藏。这里刻意**不做防抖**：候选来自内存里的笔记数组，
+ * 1151 条算一次只要几毫秒，加防抖反而会让快速连打时提示慢半拍。
+ */
+function renderSuggestions() {
+    const input = document.getElementById('quick-content');
+    const box = document.getElementById('quick-suggest');
+    if (!input || !box) return;
+
+    suggestItems = searchSuggestions(notes, input.value);
+    suggestIndex = -1;
+
+    if (suggestItems.length === 0) {
+        hideSuggestions();
+        return;
+    }
+
+    box.innerHTML = '';
+    suggestItems.forEach((item, i) => {
+        const row = document.createElement('button');
+        row.type = 'button';
+        row.className = 'suggest-row w-full text-left px-3 py-1.5 text-sm flex items-baseline gap-2 '
+            + 'hover:bg-gray-100 transition-colors duration-100';
+        row.dataset.index = String(i);
+
+        const name = document.createElement('span');
+        name.className = 'text-gray-800';
+        name.textContent = item.label;
+
+        // 灰字显示"还差多少字"，让用户知道选中后会补上什么
+        const rest = document.createElement('span');
+        rest.className = 'text-gray-400 text-xs';
+        rest.textContent = item.rest ? `+${item.rest}` : '';
+
+        const meta = document.createElement('span');
+        meta.className = 'ml-auto text-xs text-gray-400 shrink-0';
+        meta.textContent = `${item.count} 次`;
+
+        row.append(name, rest, meta);
+        // 用 mousedown 而不是 click：click 之前 input 会先失焦，
+        // 而失焦会关掉下拉，导致点不到
+        row.addEventListener('mousedown', (event) => {
+            event.preventDefault();
+            acceptSuggestion(i);
+        });
+        box.appendChild(row);
+    });
+
+    box.classList.remove('hidden');
+    highlightSuggestion();
+}
+
+function hideSuggestions() {
+    const box = document.getElementById('quick-suggest');
+    if (box) {
+        box.classList.add('hidden');
+        box.innerHTML = '';
+    }
+    suggestItems = [];
+    suggestIndex = -1;
+}
+
+/** 把选中项画出来（键盘操作时用户要知道当前选的是哪条）。 */
+function highlightSuggestion() {
+    const box = document.getElementById('quick-suggest');
+    if (!box) return;
+    box.querySelectorAll('.suggest-row').forEach((row, i) => {
+        const active = i === suggestIndex;
+        row.classList.toggle('bg-gray-100', active);
+        row.setAttribute('aria-selected', active ? 'true' : 'false');
+    });
+}
+
+/** 采纳第 i 条候选，填回输入框。 */
+function acceptSuggestion(i) {
+    const item = suggestItems[i];
+    const input = document.getElementById('quick-content');
+    if (!item || !input) return;
+    input.value = applySuggestion(input.value, item.label);
+    input.focus();
+    // 填完继续给下一段的提示（多段输入时连着打很常见），
+    // 但光标末尾那一段已经完整了，通常会自然没有候选
+    renderSuggestions();
+}
+
+/**
+ * 输入框的键盘操作。
+ *
+ * Enter 的语义要小心：有候选时是"采纳这条"，没候选时才是"提交这条笔记"。
+ * 否则用户想补全却把半截标题提交了。
+ */
+function handleQuickContentKeydown(event) {
+    if (event.key === 'Escape') {
+        hideSuggestions();
+        return;
+    }
+    if (suggestItems.length === 0) return;
+
+    if (event.key === 'ArrowDown') {
+        event.preventDefault();
+        suggestIndex = (suggestIndex + 1) % suggestItems.length;
+        highlightSuggestion();
+    } else if (event.key === 'ArrowUp') {
+        event.preventDefault();
+        suggestIndex = (suggestIndex - 1 + suggestItems.length) % suggestItems.length;
+        highlightSuggestion();
+    } else if (event.key === 'Enter' || event.key === 'Tab') {
+        // 没手动选过就采纳第一条——那是排序最靠前的，也就是最可能想要的
+        event.preventDefault();
+        acceptSuggestion(suggestIndex >= 0 ? suggestIndex : 0);
+    }
 }
 
 /** 把「今天第 N 分钟」换算成时间戳。 */
@@ -1161,6 +1271,7 @@ function quickAddNote(e) {
     setLastEndTime(endTime.getTime());
     document.getElementById('quick-content').value = '';
     document.getElementById('quick-tag').value = '';
+    hideSuggestions();
     initQuickInput();
     updateQuickContinuity();
     document.getElementById('quick-content').focus();
@@ -1537,6 +1648,18 @@ function bindEventListeners() {
     quickAddForm.addEventListener('submit', quickAddNote);
     const quickTagEl = document.getElementById('quick-tag');
     if (quickTagEl) quickTagEl.addEventListener('input', () => { quickTagEl.value = trimTagToLimit(quickTagEl.value); });
+
+    // 标题输入框的补全：输入即给候选，键盘可上下选、Enter/Tab 采纳
+    const quickContentEl = document.getElementById('quick-content');
+    if (quickContentEl) {
+        quickContentEl.addEventListener('input', renderSuggestions);
+        quickContentEl.addEventListener('keydown', handleQuickContentKeydown);
+        // 失焦就收起来。用 setTimeout 是为了让候选行的 mousedown 先跑完——
+        // 直接隐藏会让点击落空（DOM 已经没了）
+        quickContentEl.addEventListener('blur', () => setTimeout(hideSuggestions, 0));
+        // 重新聚焦时若已有内容，立刻恢复提示（比如用热键唤出、内容还在）
+        quickContentEl.addEventListener('focus', renderSuggestions);
+    }
     document.getElementById('save-note-btn').addEventListener('click', saveNote);
     document.getElementById('cancel-note-btn').addEventListener('click', closeNoteModal);
     const noteTagEl = document.getElementById('note-tag');

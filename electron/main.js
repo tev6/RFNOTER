@@ -313,6 +313,40 @@ function createWindow() {
                             await wait(1200);
                         }
                     }
+                    // 附加 --suggest=<文字>：先往标题框里打字把补全浮层调出来再截。
+                    // 补全是个"浮"在上面的东西，只有截出来才能确认它没被裁掉、
+                    // 没遮住输入框、暗色下也看得清——这些自检的断言都验不了。
+                    const suggestArg = process.argv.find((arg) => arg.startsWith('--suggest='));
+                    if (suggestArg) {
+                        const text = suggestArg.slice('--suggest='.length);
+                        const geo = await mainWindow.webContents.executeJavaScript(`(() => {
+                            const input = document.getElementById('quick-content');
+                            input.focus();
+                            input.value = ${JSON.stringify(text)};
+                            input.dispatchEvent(new Event('input', { bubbles: true }));
+                            return input.value;
+                        })()`);
+                        await wait(700);
+                        // 把浮层的真实几何打出来。截图只能看个大概，
+                        // 而"有没有超出窗口下沿""有没有盖住输入框"必须靠数字判断。
+                        const box = await mainWindow.webContents.executeJavaScript(`(() => {
+                            const b = document.getElementById('quick-suggest');
+                            const i = document.getElementById('quick-content');
+                            if (!b || !i) return null;
+                            const br = b.getBoundingClientRect();
+                            const ir = i.getBoundingClientRect();
+                            return {
+                                hidden: b.classList.contains('hidden'),
+                                rows: b.querySelectorAll('.suggest-row').length,
+                                box: { top: Math.round(br.top), bottom: Math.round(br.bottom),
+                                       left: Math.round(br.left), width: Math.round(br.width) },
+                                input: { top: Math.round(ir.top), bottom: Math.round(ir.bottom) },
+                                viewportH: window.innerHeight,
+                                overflowBottom: Math.round(br.bottom - window.innerHeight)
+                            };
+                        })()`);
+                        console.log('[RFNOTER] suggest 浮层几何:', JSON.stringify(box), '输入=', geo);
+                    }
                     const image = await mainWindow.webContents.capturePage();
                     fs.writeFileSync(target, image.toPNG());
                     console.log(`[RFNOTER] screenshot saved: ${target} ${image.getSize().width}x${image.getSize().height}`);
@@ -885,6 +919,106 @@ async function runSelfTest() {
         '右上角按钮在可视区内',
         layout.buttonRight !== null && layout.buttonRight <= layout.clientWidth + 1 && layout.buttonLeft >= -1,
         JSON.stringify(layout)
+    );
+
+    /* --------------------------------------------------------------
+     * C3：输入补全（v2.11.0）
+     *
+     * 放在自检的**最末尾**，因为它必须往隔离库里种几条笔记才有候选可补
+     * （没有历史就没有词表）。种数据会改变笔记条数，前面那些对条数敏感的
+     * 检查（撤销那组的 before===1、布局那组的卡片总数）就会被带偏——踩过。
+     * 放到最后，既不用小心翼翼清理，也不影响任何人。
+     * -------------------------------------------------------------- */
+    const suggestProbe = await win.webContents.executeJavaScript(`(async () => {
+        const input = document.getElementById('quick-content');
+        const box = document.getElementById('quick-suggest');
+        const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+        const count = () => document.querySelectorAll('.note-card').length;
+
+        const seededBefore = count();
+        for (const content of ['CS+B站', 'CS+吃饭', 'B站+吃饭']) {
+            input.value = content;
+            document.getElementById('quick-time-start').value = '09:00';
+            document.getElementById('quick-time-end').value = '09:40';
+            document.getElementById('quick-add-form')
+                .dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+            await wait(60);
+        }
+        const seeded = count() - seededBefore;
+
+        // 打字应当给候选
+        input.value = 'C';
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+        await wait(30);
+        const rows = [...box.querySelectorAll('.suggest-row')];
+        const opened = !box.classList.contains('hidden');
+        const inputRect = input.getBoundingClientRect();
+        const boxRect = box.getBoundingClientRect();
+        // 浮层要**完整落在视口内**。
+        //
+        // 这里曾经只断言"在输入框下方"，结果漏掉一个真 bug：输入区钉在页面底部，
+        // 朝下展开会捅出窗口下沿（实测视口高 739、浮层底边 976，超出 237px），
+        // 8 条候选几乎全被切掉——断言却是绿的，因为"确实在下方"。
+        // 所以必须直接验可见性：上边不出顶、下边不出底。
+        const aboveInput = boxRect.bottom <= inputRect.top + 1;
+        const inViewport = boxRect.top >= 0 && boxRect.bottom <= window.innerHeight + 1;
+
+        // 点候选填回输入框
+        rows[0]?.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+        await wait(30);
+        const afterClick = input.value;
+
+        // Esc 收起但保留内容
+        input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+        await wait(20);
+        const closedByEsc = box.classList.contains('hidden');
+
+        // 多段输入：打完分隔符后应当提示下一段，且前面的段保留
+        input.value = 'CS+';
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+        await wait(30);
+        const nextSegRows = box.querySelectorAll('.suggest-row').length;
+        box.querySelector('.suggest-row')
+            ?.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+        await wait(30);
+        const multiSegValue = input.value;
+
+        input.value = '';
+        return {
+            seeded, opened, rowCount: rows.length, aboveInput, inViewport,
+            viewportH: window.innerHeight,
+            boxBottom: Math.round(boxRect.bottom),
+            inputTop: Math.round(inputRect.top),
+            afterClick, closedByEsc, keptAfterEsc: closedByEsc, nextSegRows, multiSegValue
+        };
+    })()`);
+    check(
+        'C3 输入补全：打字后浮层弹出且有候选',
+        suggestProbe.opened && suggestProbe.rowCount > 0,
+        JSON.stringify(suggestProbe)
+    );
+    check(
+        'C3 输入补全：浮层完整可见（在输入框上方，且不超出窗口）',
+        suggestProbe.aboveInput === true && suggestProbe.inViewport === true,
+        `上方=${suggestProbe.aboveInput} 视口内=${suggestProbe.inViewport} `
+            + `浮层底=${suggestProbe.boxBottom} 输入框顶=${suggestProbe.inputTop} 视口高=${suggestProbe.viewportH}`
+    );
+    check(
+        'C3 输入补全：点候选能填回标题框',
+        typeof suggestProbe.afterClick === 'string' && suggestProbe.afterClick.length > 1
+            && suggestProbe.afterClick !== 'C',
+        `填回="${suggestProbe.afterClick}"`
+    );
+    check(
+        'C3 输入补全：Esc 收起候选',
+        suggestProbe.closedByEsc === true,
+        `收起=${suggestProbe.closedByEsc}`
+    );
+    check(
+        'C3 输入补全：多段输入只补当前一段，前面的段保留',
+        suggestProbe.nextSegRows > 0 && String(suggestProbe.multiSegValue).startsWith('CS+')
+            && String(suggestProbe.multiSegValue).length > 3,
+        `候选 ${suggestProbe.nextSegRows} 条 / 结果 "${suggestProbe.multiSegValue}"`
     );
 
     check('页面无严重控制台错误', consoleErrors.length === 0, consoleErrors.join(' | ').slice(0, 300));
